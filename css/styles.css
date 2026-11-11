@@ -3663,3 +3663,17 @@ button {
   width: 14px;
   height: 14px;
 }
+
+/* Fast Loading Spinner */
+.luma-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  border: 3px solid rgba(139, 92, 246, 0.2);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: lumaSpin 0.65s linear infinite;
+}
+@keyframes lumaSpin {
+  to { transform: rotate(360deg); }
+}

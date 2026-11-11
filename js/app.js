@@ -10,6 +10,41 @@
 (function () {
   "use strict";
 
+  const IS_STATIC_HOST =
+    window.location.hostname.includes("github.io") ||
+    window.location.protocol === "file:" ||
+    window.location.hostname.includes("pages.dev") ||
+    window.location.hostname.includes("vercel.app") ||
+    window.location.hostname.includes("netlify.app");
+
+  async function fastFetchJson(url, timeoutMs = 2800) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+        signal: ctrl.signal,
+      });
+      clearTimeout(tid);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  const DEFAULT_STARTER_HOME = [
+    { id: 16498, name: "Shingeki no Kyojin", russian: "Атака титанов", score: "8.5", kind: "tv", episodes: 25, poster_url: "https://shikimori.one/system/animes/original/16498.jpg?1711973439", banner_url: "https://shikimori.one/system/animes/original/16498.jpg?1711973439" },
+    { id: 5114, name: "Fullmetal Alchemist: Brotherhood", russian: "Стальной алхимик: Братство", score: "9.1", kind: "tv", episodes: 64, poster_url: "https://shikimori.one/system/animes/original/5114.jpg?1711949773", banner_url: "https://shikimori.one/system/animes/original/5114.jpg?1711949773" },
+    { id: 30276, name: "One Punch Man", russian: "Ванпанчмен", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/30276.jpg?1711967568", banner_url: "https://shikimori.one/system/animes/original/30276.jpg?1711967568" },
+    { id: 38000, name: "Kimetsu no Yaiba", russian: "Клинок, рассекающий демонов", score: "8.5", kind: "tv", episodes: 26, poster_url: "https://shikimori.one/system/animes/original/38000.jpg?1711958556", banner_url: "https://shikimori.one/system/animes/original/38000.jpg?1711958556" },
+    { id: 40748, name: "Jujutsu Kaisen", russian: "Магическая битва", score: "8.6", kind: "tv", episodes: 24, poster_url: "https://shikimori.one/system/animes/original/40748.jpg?1711953835", banner_url: "https://shikimori.one/system/animes/original/40748.jpg?1711953835" },
+    { id: 44511, name: "Chainsaw Man", russian: "Человек-бензопила", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/44511.jpg?1711954497", banner_url: "https://shikimori.one/system/animes/original/44511.jpg?1711954497" },
+    { id: 52991, name: "Sousou no Frieren", russian: "Провожающая в последний путь Фрирен", score: "9.3", kind: "tv", episodes: 28, poster_url: "https://shikimori.one/system/animes/original/52991.jpg?1711953112", banner_url: "https://shikimori.one/system/animes/original/52991.jpg?1711953112" },
+    { id: 21, name: "One Piece", russian: "Ван-Пис", score: "8.7", kind: "tv", episodes: 1180, poster_url: "https://shikimori.one/system/animes/original/21.jpg?1711954707", banner_url: "https://shikimori.one/system/animes/original/21.jpg?1711954707" },
+    { id: 52299, name: "Ore dake Level Up na Ken", russian: "Поднятие уровня в одиночку", score: "8.3", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/52299.jpg?1711953046", banner_url: "https://shikimori.one/system/animes/original/52299.jpg?1711953046" }
+  ];
+
   // =========================================================================
   // 1. Curated Genres with Custom Vector Icons (Shikimori Genre IDs)
   // =========================================================================
@@ -195,6 +230,8 @@
     wideShowcaseIndex: 0,
     wideShowcaseTimer: null,
 
+    catalogCache: {},
+    detailCache: {},
     catalog: {
       page: 1,
       search: "",
@@ -606,124 +643,151 @@
   // =========================================================================
   // 6. Home View & Wide Promotional Banners
   // =========================================================================
+  // =========================================================================
+  // 6. Home View & Wide Promotional Banners (Instant Zero-Delay Cached Loading)
+  // =========================================================================
   async function initHomeView(forceRefresh = false) {
     try {
       renderHomeGenreRail();
       renderHomeQuickGenreTabs();
       renderContinueWatching();
 
-      const ongoingGrid = document.getElementById("homeOngoingGrid");
-      const topRatedGrid = document.getElementById("homeTopRatedGrid");
-      renderSkeletonGrid(ongoingGrid, 8);
-      renderSkeletonGrid(topRatedGrid, 8);
+      // 1. Instant 0ms Render from Cache or Starter Bundle
+      let cached = null;
+      try {
+        const raw = localStorage.getItem("luma_home_cache_v3");
+        if (raw) cached = JSON.parse(raw);
+      } catch (_) {}
 
-      let data = null;
-      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      if (isLocal) {
-        try {
-          const ctrl = new AbortController();
-          const tid = setTimeout(() => ctrl.abort(), 3500);
-          const res = await fetch(`/api/home${forceRefresh ? "?refresh=1" : ""}`, { signal: ctrl.signal });
-          clearTimeout(tid);
-          if (res.ok) {
-            data = await res.json();
-          }
-        } catch (err) {
-          console.warn("Local home fetch failed/timed out, switching to cloud fallback...", err);
-        }
-      }
-
-      if (!data || !data.ongoing_top || data.ongoing_top.length === 0) {
-        try {
-          const [ongoingRes, popularRes, topRatedRes, anilibriaRes] = await Promise.all([
-            fetch("https://shikimori.me/api/animes?order=popularity&limit=16&status=ongoing").catch(() => fetch("https://shikimori.one/api/animes?order=popularity&limit=16&status=ongoing")).catch(() => null),
-            fetch("https://shikimori.me/api/animes?order=popularity&limit=16").catch(() => fetch("https://shikimori.one/api/animes?order=popularity&limit=16")).catch(() => null),
-            fetch("https://shikimori.me/api/animes?order=ranked&limit=16").catch(() => fetch("https://shikimori.one/api/animes?order=ranked&limit=16")).catch(() => null),
-            fetch("https://anilibria.top/api/v1/anime/schedule/now").catch(() => null),
-          ]);
-          const ongoing = ongoingRes && ongoingRes.ok ? await ongoingRes.json().catch(() => []) : [];
-          const popular = popularRes && popularRes.ok ? await popularRes.json().catch(() => []) : [];
-          const topRated = topRatedRes && topRatedRes.ok ? await topRatedRes.json().catch(() => []) : [];
-          let freshAniLibria = [];
-          if (anilibriaRes && anilibriaRes.ok) {
-            const alData = await anilibriaRes.json().catch(() => []);
-            freshAniLibria = (Array.isArray(alData) ? alData : []).slice(0, 8).map((rel) => ({
-              id: rel.shikimori?.id || rel.id,
-              name: rel.name?.english || rel.name?.main || "",
-              russian: rel.name?.main || "",
-              score: "8.5",
-              kind: "tv",
-              episodes: rel.episodes_total || 12,
-              image: { original: rel.poster?.src ? `https://anilibria.top${rel.poster.src}` : "" },
-            }));
-          }
-          data = {
-            ongoing_top: Array.isArray(ongoing) ? ongoing : [],
-            popular_all_time: Array.isArray(popular) ? popular : [],
-            top_rated: Array.isArray(topRated) ? topRated : [],
-            recent_anilibria: freshAniLibria,
+      const initialData = cached && cached.ongoing_top && cached.ongoing_top.length > 0
+        ? cached
+        : {
+            ongoing_top: DEFAULT_STARTER_HOME,
+            popular_all_time: DEFAULT_STARTER_HOME,
+            top_rated: DEFAULT_STARTER_HOME,
+            recent_anilibria: []
           };
-        } catch (fallbackErr) {
-          console.error("Client side home fallback failed:", fallbackErr);
-        }
-      }
 
-      if (!data) return;
-      state.homeData = data;
+      applyHomeData(initialData);
 
-      const candidates = [...(data.ongoing_top || []), ...(data.popular_all_time || [])];
-      const withBanners = candidates.filter((a) => a.banner_url && a.banner_url !== a.poster_url);
-      state.heroItems = (withBanners.length >= 4 ? withBanners : candidates).slice(0, 6);
-      renderHeroSpotlight(0);
-      startHeroRotation();
-
-      // Collect anime with wide artwork for rotating anime banners
-      const allCandidates = [
-        ...(data.popular_all_time || []),
-        ...(data.ongoing_top || []),
-        ...(data.top_rated || []),
-      ];
-      const seenIds = new Set();
-      state.animeBannerList = allCandidates.filter((a) => {
-        if (!a || !a.id || seenIds.has(a.id)) return false;
-        seenIds.add(a.id);
-        return a.banner_url && a.banner_url !== a.poster_url;
-      });
-
-      if (state.animeBannerList.length < 9) {
-        allCandidates.forEach((a) => {
-          if (a && a.id && !seenIds.has(a.id)) {
-            seenIds.add(a.id);
-            state.animeBannerList.push(a);
-          }
-        });
-      }
-
-      renderAnimeBanners(0);
-      startAnimeBannerRotation();
-
-      // Mid-page Panoramic Anime Banners List & Auto-Rotation
-      state.wideShowcaseList = (
-        state.animeBannerList.length >= 6
-          ? state.animeBannerList
-          : allCandidates
-      ).slice(0, 6);
-      renderWideShowcaseBanner(0);
-      startWideShowcaseRotation();
-
-      renderAnimeGrid(ongoingGrid, (data.ongoing_top || []).slice(0, 12));
-      renderAnimeGrid(topRatedGrid, (data.top_rated || []).slice(0, 12));
-      renderFreshDubGrid(data.recent_anilibria || []);
-
-      loadHomeGenreShowcase("1");
+      // 2. Fast background update from shikimori.one
+      fetchFreshHomeData(forceRefresh);
     } catch (err) {
-      console.error("Failed to load home data:", err);
+      console.error("initHomeView error:", err);
     }
   }
 
-  // =========================================================================
-  // Dynamic Rotating Anime Banners Showcase (3 Cards Auto-Changing Rail)
-  // =========================================================================
+  function applyHomeData(data) {
+    if (!data) return;
+    state.homeData = data;
+
+    const candidates = [...(data.ongoing_top || []), ...(data.popular_all_time || [])];
+    const withBanners = candidates.filter((a) => a.banner_url && a.banner_url !== a.poster_url);
+    state.heroItems = (withBanners.length >= 4 ? withBanners : candidates).slice(0, 6);
+    renderHeroSpotlight(0);
+    startHeroRotation();
+
+    const allCandidates = [
+      ...(data.popular_all_time || []),
+      ...(data.ongoing_top || []),
+      ...(data.top_rated || []),
+    ];
+    const seenIds = new Set();
+    state.animeBannerList = allCandidates.filter((a) => {
+      if (!a || !a.id || seenIds.has(a.id)) return false;
+      seenIds.add(a.id);
+      return a.banner_url && a.banner_url !== a.poster_url;
+    });
+
+    if (state.animeBannerList.length < 9) {
+      allCandidates.forEach((a) => {
+        if (a && a.id && !seenIds.has(a.id)) {
+          seenIds.add(a.id);
+          state.animeBannerList.push(a);
+        }
+      });
+    }
+
+    renderAnimeBanners(0);
+    startAnimeBannerRotation();
+
+    state.wideShowcaseList = (
+      state.animeBannerList.length >= 6
+        ? state.animeBannerList
+        : allCandidates
+    ).slice(0, 6);
+    renderWideShowcaseBanner(0);
+    startWideShowcaseRotation();
+
+    const ongoingGrid = document.getElementById("homeOngoingGrid");
+    const topRatedGrid = document.getElementById("homeTopRatedGrid");
+    if (ongoingGrid) renderAnimeGrid(ongoingGrid, (data.ongoing_top || []).slice(0, 12));
+    if (topRatedGrid) renderAnimeGrid(topRatedGrid, (data.top_rated || []).slice(0, 12));
+    renderFreshDubGrid(data.recent_anilibria || []);
+  }
+
+  async function fetchFreshHomeData(forceRefresh = false) {
+    let data = null;
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (isLocal && !IS_STATIC_HOST) {
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 2000);
+        const res = await fetch(`/api/home${forceRefresh ? "?refresh=1" : ""}`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (res.ok) data = await res.json();
+      } catch (_) {}
+    }
+
+    if (!data || !data.ongoing_top || data.ongoing_top.length === 0) {
+      try {
+        const [ongoing, popular, topRated, alData] = await Promise.all([
+          fastFetchJson("https://shikimori.one/api/animes?order=popularity&limit=16&status=ongoing", 2800),
+          fastFetchJson("https://shikimori.one/api/animes?order=popularity&limit=16", 2800),
+          fastFetchJson("https://shikimori.one/api/animes?order=ranked&limit=16", 2800),
+          fastFetchJson("https://anilibria.top/api/v1/anime/schedule/now", 2800)
+        ]);
+
+        let freshAniLibria = [];
+        if (alData && typeof alData === "object") {
+          const list = Array.isArray(alData) ? alData : (alData.today || Object.values(alData)[0] || []);
+          if (Array.isArray(list)) {
+            freshAniLibria = list.slice(0, 8).map((rel) => {
+              const r = rel.release || rel;
+              return {
+                id: r.shikimori?.id || r.id,
+                name: r.name?.english || r.name?.main || "",
+                russian: r.name?.main || "",
+                score: "8.5",
+                kind: "tv",
+                episodes: r.episodes_total || 12,
+                image: { original: r.poster?.src ? `https://anilibria.top${r.poster.src}` : "" },
+              };
+            });
+          }
+        }
+
+        if (Array.isArray(ongoing) && ongoing.length > 0) {
+          data = {
+            ongoing_top: ongoing,
+            popular_all_time: Array.isArray(popular) && popular.length > 0 ? popular : ongoing,
+            top_rated: Array.isArray(topRated) && topRated.length > 0 ? topRated : ongoing,
+            recent_anilibria: freshAniLibria,
+          };
+        }
+      } catch (e) {
+        console.warn("fetchFreshHomeData error:", e);
+      }
+    }
+
+    if (data && data.ongoing_top && data.ongoing_top.length > 0) {
+      applyHomeData(data);
+      try {
+        localStorage.setItem("luma_home_cache_v3", JSON.stringify(data));
+      } catch (_) {}
+    }
+  }
+
   function renderAnimeBanners(page) {
     const track = document.getElementById("animeBannersTrack");
     const dotsEl = document.getElementById("animeBannerDots");
@@ -968,7 +1032,7 @@
     }
     if (!items || !items.length) {
       try {
-        const res = await fetch(`https://shikimori.me/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`)
+        const res = await fetch(`https://shikimori.one/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`)
           .catch(() => fetch(`https://shikimori.one/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`));
         if (res && res.ok) items = await res.json();
       } catch (_) {}
@@ -1213,45 +1277,47 @@
     document.getElementById("catalogPrevPageBtn").disabled = state.catalog.page <= 1;
     document.getElementById("catalogPrevPageTop").disabled = state.catalog.page <= 1;
 
+    const cacheKey = params.toString();
+    if (state.catalogCache && state.catalogCache[cacheKey]) {
+      renderAnimeGrid(grid, state.catalogCache[cacheKey]);
+      const hasMore = state.catalogCache[cacheKey].length >= 24;
+      document.getElementById("catalogNextPageBtn").disabled = !hasMore;
+      document.getElementById("catalogNextPageTop").disabled = !hasMore;
+      return;
+    }
+
     let items = null;
     const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal) {
+    if (isLocal && !IS_STATIC_HOST) {
       try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 3500);
+        const tid = setTimeout(() => ctrl.abort(), 2000);
         const res = await fetch(`/api/catalog?${params.toString()}`, { signal: ctrl.signal });
         clearTimeout(tid);
         if (res.ok) {
           const data = await res.json();
           items = data.items || [];
         }
-      } catch (err) {
-        console.warn("Local catalog fetch failed/timed out, switching to client...", err);
-      }
+      } catch (_) {}
     }
 
     if (!items) {
-      try {
-        let targetUrl = `https://shikimori.me/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}`;
-        if (state.catalog.search) targetUrl += `&search=${encodeURIComponent(state.catalog.search)}`;
-        if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
-        if (state.catalog.kind) targetUrl += `&kind=${state.catalog.kind}`;
-        if (state.catalog.status) targetUrl += `&status=${state.catalog.status}`;
-        if (state.catalog.selectedGenres.size > 0) targetUrl += `&genre=${Array.from(state.catalog.selectedGenres).join(",")}`;
-        const shikiRes = await fetch(targetUrl).catch(() => fetch(targetUrl.replace("shikimori.me", "shikimori.one")));
-        if (shikiRes && shikiRes.ok) {
-          let raw = await shikiRes.json();
-          if (Array.isArray(raw) && state.catalog.search) {
-            raw = rerankSearchResultsClient(raw, state.catalog.search).slice(0, 24);
-          }
-          items = raw;
-        }
-      } catch (e) {
-        console.error("Client side catalog query failed:", e);
+      let targetUrl = `https://shikimori.one/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}`;
+      if (state.catalog.search) targetUrl += `&search=${encodeURIComponent(state.catalog.search)}`;
+      if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
+      if (state.catalog.kind) targetUrl += `&kind=${state.catalog.kind}`;
+      if (state.catalog.status) targetUrl += `&status=${state.catalog.status}`;
+      if (state.catalog.selectedGenres.size > 0) targetUrl += `&genre=${Array.from(state.catalog.selectedGenres).join(",")}`;
+
+      items = await fastFetchJson(targetUrl, 2600);
+      if (Array.isArray(items) && state.catalog.search) {
+        items = rerankSearchResultsClient(items, state.catalog.search).slice(0, 24);
       }
     }
 
     items = items || [];
+    state.catalogCache = state.catalogCache || {};
+    state.catalogCache[cacheKey] = items;
     renderAnimeGrid(grid, items);
 
     const hasMore = items.length >= 24;
@@ -1379,7 +1445,7 @@
       } catch (_) {}
       if (!calendarItems.length) {
         try {
-          const cRes = await fetch("https://shikimori.me/api/calendar").catch(() => fetch("https://shikimori.one/api/calendar"));
+          const cRes = await fetch("https://shikimori.one/api/calendar").catch(() => fetch("https://shikimori.one/api/calendar"));
           if (cRes && cRes.ok) {
             calendarItems = await cRes.json();
           }
@@ -1478,7 +1544,7 @@
   // =========================================================================
   async function fetchClientSideAnimeDetail(animeId) {
     try {
-      const shikiResp = await fetch(`https://shikimori.me/api/animes/${animeId}`, {
+      const shikiResp = await fetch(`https://shikimori.one/api/animes/${animeId}`, {
         headers: { Accept: "application/json" }
       }).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}`));
       if (!shikiResp || !shikiResp.ok) return null;
@@ -1488,7 +1554,7 @@
       // Extract franchise & seasons if available
       let seasons = [];
       try {
-        const frResp = await fetch(`https://shikimori.me/api/animes/${animeId}/franchise`).catch(() => null);
+        const frResp = await fetch(`https://shikimori.one/api/animes/${animeId}/franchise`).catch(() => null);
         if (frResp && frResp.ok) {
           const frData = await frResp.json();
           if (frData && Array.isArray(frData.nodes)) {
@@ -1699,8 +1765,8 @@
       let similar = [];
       try {
         const [relRes, simRes] = await Promise.all([
-          fetch(`https://shikimori.me/api/animes/${animeId}/related`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/related`)).catch(() => null),
-          fetch(`https://shikimori.me/api/animes/${animeId}/similar`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/similar`)).catch(() => null),
+          fetch(`https://shikimori.one/api/animes/${animeId}/related`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/related`)).catch(() => null),
+          fetch(`https://shikimori.one/api/animes/${animeId}/similar`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/similar`)).catch(() => null),
         ]);
         if (relRes && relRes.ok) {
           const rawRel = await relRes.json().catch(() => []);
@@ -2762,8 +2828,11 @@
                 <button type="button" class="luma-pill-ctrl" id="lumaSpeedBtn" title="Скорость воспроизведения">
                   ${state.currentPlayerState.playbackRate}x
                 </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaNextEpBtn" title="Следующая серия">
-                  След. серия →
+                <button type="button" class="luma-pill-ctrl" id="lumaPrevEpBtn" title="Предыдущая серия (P)">
+                  ← Пред.
+                </button>
+                <button type="button" class="luma-pill-ctrl" id="lumaNextEpBtn" title="Следующая серия (N)">
+                  След. →
                 </button>
                 <button type="button" class="luma-ctrl-btn" id="lumaFullscreenBtn" title="На весь экран (F)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;">
@@ -2791,7 +2860,17 @@
         };
 
         if (window.Hls && window.Hls.isSupported()) {
-          const hls = new window.Hls({ enableWorker: true });
+          const hls = new window.Hls({
+            enableWorker: true,
+            lowLatencyMode: true,
+            backBufferLength: 30,
+            maxBufferLength: 25,
+            maxMaxBufferLength: 50,
+            maxBufferSize: 25 * 1000 * 1000,
+            liveSyncDurationCount: 2,
+            nudgeOffset: 0.1,
+            nudgeMaxRetry: 5
+          });
           state.hlsInstance = hls;
           hls.loadSource(hlsUrl);
           hls.attachMedia(video);
@@ -3249,19 +3328,37 @@
       showToast(`Скорость воспроизведения: ${nextRate}x`);
     });
 
-    nextEpBtn?.addEventListener("click", () => {
-      const total = state.currentAnimeDetail?.total_available_episodes || 1;
-      if (state.currentPlayerState.episodeOrdinal < total) {
-        state.currentPlayerState.episodeOrdinal++;
+    const prevEpBtn = document.getElementById("lumaPrevEpBtn");
+
+    const doPrevEpisode = () => {
+      const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
+      if (cur > 1) {
+        state.currentPlayerState.episodeOrdinal = cur - 1;
         state.currentPlayerState.savedCurrentTime = 0;
-        populateVoiceoverDropdown(state.currentPlayerState.episodeOrdinal);
+        populateVoiceoverDropdown(cur - 1);
         renderEpisodesSidebarList();
         renderPlayerViewport(true);
-        showToast(`Переход к ${state.currentPlayerState.episodeOrdinal}-й серии`);
-      } else {
-        showToast("Это последняя вышедшая серия на данный момент");
+        showToast(`Серия ${cur - 1}`);
       }
-    });
+    };
+
+    const doNextEpisode = () => {
+      const total = state.currentAnimeDetail?.total_available_episodes || 1;
+      const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
+      if (cur < total) {
+        state.currentPlayerState.episodeOrdinal = cur + 1;
+        state.currentPlayerState.savedCurrentTime = 0;
+        populateVoiceoverDropdown(cur + 1);
+        renderEpisodesSidebarList();
+        renderPlayerViewport(true);
+        showToast(`Серия ${cur + 1}`);
+      } else {
+        showToast("Это последняя вышедшая серия");
+      }
+    };
+
+    prevEpBtn?.addEventListener("click", doPrevEpisode);
+    nextEpBtn?.addEventListener("click", doNextEpisode);
 
     fsBtn?.addEventListener("click", () => {
       if (!document.fullscreenElement) {
@@ -3316,9 +3413,16 @@
         e.preventDefault();
         video.muted = !video.muted;
         showToast(video.muted ? "Звук отключен" : "Звук включен");
-      } else if ((code === "KeyN" || key === "n" || key === "N" || key === "т" || key === "Т") && e.shiftKey) {
+      } else if (code === "KeyN" || key === "n" || key === "N" || key === "т" || key === "Т") {
         e.preventDefault();
-        nextEpBtn?.click();
+        doNextEpisode();
+      } else if (code === "KeyP" || key === "p" || key === "P" || key === "з" || key === "З") {
+        e.preventDefault();
+        doPrevEpisode();
+      } else if (code === "KeyS" || key === "s" || key === "S" || key === "ы" || key === "Ы" ||
+                 code === "KeyO" || key === "o" || key === "O" || key === "щ" || key === "Щ") {
+        e.preventDefault();
+        doSkipOpening();
       }
     }
 
@@ -3384,6 +3488,8 @@
       timer = setTimeout(async () => {
         try {
           let items = null;
+          items = await fastFetchJson(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=10`, 1800);
+          if (Array.isArray(items)) items = rerankSearchResultsClient(items, q).slice(0, 8);
           const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
           if (isLocal) {
             try {
@@ -3396,7 +3502,7 @@
           }
           if (!items) {
             try {
-              const shikiRes = await fetch(`https://shikimori.me/api/animes?search=${encodeURIComponent(q)}&limit=15`)
+              const shikiRes = await fetch(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=15`)
                 .catch(() => fetch(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=15`));
               if (shikiRes && shikiRes.ok) {
                 const raw = await shikiRes.json();
@@ -3431,7 +3537,7 @@
           }
           dropdown.classList.remove("hidden");
         } catch (_) {}
-      }, 280);
+      }, 120);
     });
 
     document.addEventListener("click", (e) => {
