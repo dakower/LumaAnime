@@ -2120,7 +2120,7 @@
                   ${voiceovers
                     .map(
                       (v) => `
-                    <option value="${escapeHtml(v.id)}" data-name="${escapeHtml(v.name)}" data-short-label="${escapeHtml(v.name)}" data-badge="${escapeHtml(v.badge)}">
+                    <option value="${escapeHtml(v.id)}" data-id="${escapeHtml(v.id)}" data-name="${escapeHtml(v.name)}" data-link="${escapeHtml(v.link || "")}" data-short-label="${escapeHtml(v.name)}" data-badge="${escapeHtml(v.badge)}">
                       ${escapeHtml(v.name)}
                     </option>
                   `
@@ -2522,12 +2522,14 @@
           state.currentPlayerState.savedCurrentTime = videoEl.currentTime;
         }
         const opt = voSelect.options[voSelect.selectedIndex];
-        state.currentPlayerState.voiceoverId = voSelect.value;
-        state.currentPlayerState.voiceoverName = opt?.dataset.name || opt?.textContent || "Русская озвучка";
-        state.currentPlayerState.voiceoverBadge = opt?.dataset.badge || "";
+        if (!opt) return;
+        state.currentPlayerState.voiceoverId = opt.dataset.id || opt.value;
+        state.currentPlayerState.voiceoverName = opt.dataset.name || opt.textContent || "Русская озвучка";
+        state.currentPlayerState.voiceoverLink = opt.dataset.link || "";
+        state.currentPlayerState.voiceoverBadge = opt.dataset.badge || "";
 
         renderPlayerViewport(true);
-        showToast(`Озвучка изменена: ${state.currentPlayerState.voiceoverName}`);
+        showToast(`Озвучка: ${state.currentPlayerState.voiceoverName}`);
       });
     }
 
@@ -2578,8 +2580,10 @@
         (currentEp >= anilibriaVo.ep_min && currentEp <= anilibriaVo.ep_max) ||
         (currentEpObj && currentEpObj.has_hls);
       const opt = document.createElement("option");
-      opt.value = anilibriaVo.name;
+      opt.value = anilibriaVo.id || "anilibria_hls";
+      opt.dataset.id = anilibriaVo.id || "anilibria_hls";
       opt.dataset.name = anilibriaVo.name;
+      opt.dataset.link = anilibriaVo.link || "";
       opt.dataset.shortLabel = "AniLibria.TV (FHD)";
       opt.dataset.badge = isAlAvail ? "1080p FHD" : `Серии ${anilibriaVo.ep_min || 1}–${anilibriaVo.ep_max || ""}`;
       opt.textContent = isAlAvail ? anilibriaVo.name : `${anilibriaVo.name} [Недоступно: сер. ${currentEp}]`;
@@ -2592,8 +2596,10 @@
     otherVos.forEach((v) => {
       const isAvail = (!v.ep_min && !v.ep_max) || (currentEp >= v.ep_min && currentEp <= v.ep_max);
       const opt = document.createElement("option");
-      opt.value = v.name;
+      opt.value = v.id || v.name;
+      opt.dataset.id = v.id || v.name;
       opt.dataset.name = v.name;
+      opt.dataset.link = v.link || "";
       opt.dataset.shortLabel = v.name;
       opt.dataset.badge = v.badge || (v.type === "Sub" ? "Субтитры" : "Русская озвучка");
       if (isAvail) {
@@ -2612,15 +2618,17 @@
     });
 
     // Ensure an available voiceover is selected
+    const currentVoId = (state.currentPlayerState.voiceoverId || "").trim();
     const currentVoName = (state.currentPlayerState.voiceoverName || "").trim().toLowerCase();
     let foundIdx = -1;
     for (let i = 0; i < voSelect.options.length; i++) {
       const opt = voSelect.options[i];
       if (opt.disabled) continue;
-      const optName = (opt.dataset.name || opt.value || "").trim().toLowerCase();
+      const optId = (opt.dataset.id || opt.value || "").trim();
+      const optName = (opt.dataset.name || opt.textContent || "").trim().toLowerCase();
       if (
-        currentVoName &&
-        (optName === currentVoName || optName.includes(currentVoName) || currentVoName.includes(optName))
+        (currentVoId && (optId === currentVoId || opt.value === currentVoId)) ||
+        (currentVoName && (optName === currentVoName || optName.includes(currentVoName) || currentVoName.includes(optName)))
       ) {
         foundIdx = i;
         break;
@@ -2650,7 +2658,9 @@
       voSelect.selectedIndex = foundIdx;
       const chosenOpt = voSelect.options[foundIdx];
       const prevVo = state.currentPlayerState.voiceoverName;
-      state.currentPlayerState.voiceoverName = chosenOpt.dataset.name || chosenOpt.value;
+      state.currentPlayerState.voiceoverId = chosenOpt.dataset.id || chosenOpt.value;
+      state.currentPlayerState.voiceoverName = chosenOpt.dataset.name || chosenOpt.textContent;
+      state.currentPlayerState.voiceoverLink = chosenOpt.dataset.link || "";
       state.currentPlayerState.voiceoverBadge = chosenOpt.dataset.badge || "";
       if (prevVo && prevVo !== state.currentPlayerState.voiceoverName) {
         if (state.hlsInstance || state.currentPlayerState.activeHls) {
@@ -2735,87 +2745,6 @@
     if (voSelect._refreshLumaDropdown) {
       voSelect._refreshLumaDropdown();
     }
-  }
-
-  function bindBalancerHudControls(vp) {
-    const prevEpBtn = document.getElementById("lumaPrevEpBtn");
-    const nextEpBtn = document.getElementById("lumaNextEpBtn");
-    const autoplayBtn = document.getElementById("lumaAutoplayBtn");
-    const fsBtn = document.getElementById("lumaFullscreenBtn");
-
-    const total = state.currentAnimeDetail?.total_available_episodes || 1;
-    const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
-
-    prevEpBtn?.addEventListener("click", () => {
-      if (cur > 1) {
-        state.currentPlayerState.episodeOrdinal = cur - 1;
-        populateVoiceoverDropdown(cur - 1);
-        renderEpisodesSidebarList();
-        renderPlayerViewport(true);
-        showToast(`Серия ${cur - 1}`);
-      } else {
-        showToast("Это первая серия");
-      }
-    });
-
-    nextEpBtn?.addEventListener("click", () => {
-      if (cur < total) {
-        state.currentPlayerState.episodeOrdinal = cur + 1;
-        populateVoiceoverDropdown(cur + 1);
-        renderEpisodesSidebarList();
-        renderPlayerViewport(true);
-        showToast(`Серия ${cur + 1}`);
-      } else {
-        showToast("Это последняя вышедшая серия");
-      }
-    });
-
-    autoplayBtn?.addEventListener("click", () => {
-      state.currentPlayerState.autoplay = state.currentPlayerState.autoplay === false ? true : false;
-      autoplayBtn.textContent = state.currentPlayerState.autoplay ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
-      autoplayBtn.classList.toggle("active", state.currentPlayerState.autoplay);
-      showToast(`Автопереход: ${state.currentPlayerState.autoplay ? "Включен" : "Выключен"}`);
-    });
-
-    fsBtn?.addEventListener("click", () => {
-      if (!document.fullscreenElement) {
-        vp.requestFullscreen?.();
-      } else {
-        document.exitFullscreen?.();
-      }
-    });
-
-    const resetInactivity = () => {
-      vp.classList.remove("hide-cursor");
-      vp.classList.add("show-controls");
-      if (state.hideControlsTimeout) clearTimeout(state.hideControlsTimeout);
-      state.hideControlsTimeout = setTimeout(() => {
-        vp.classList.add("hide-cursor");
-        vp.classList.remove("show-controls");
-      }, 3000);
-    };
-
-    vp.addEventListener("mousemove", resetInactivity);
-    vp.addEventListener("mouseenter", resetInactivity);
-    vp.addEventListener("touchstart", resetInactivity);
-    resetInactivity();
-
-    function handleBalancerKeydown(e) {
-      if (["input", "textarea", "select"].includes(document.activeElement?.tagName?.toLowerCase())) return;
-      if (e.key === "n" || e.key === "N" || e.key === "т" || e.key === "Т") {
-        nextEpBtn?.click();
-      } else if (e.key === "p" || e.key === "P" || e.key === "з" || e.key === "З") {
-        prevEpBtn?.click();
-      } else if (e.key === "f" || e.key === "F" || e.key === "а" || e.key === "А") {
-        fsBtn?.click();
-      }
-    }
-
-    if (state.__playerKeyHandler) {
-      document.removeEventListener("keydown", state.__playerKeyHandler);
-    }
-    document.addEventListener("keydown", handleBalancerKeydown);
-    state.__playerKeyHandler = handleBalancerKeydown;
   }
 
   function renderPlayerViewport(autoPlayAfterSwitch = false) {
@@ -3001,67 +2930,37 @@
         if (myPlaybackToken !== state.currentPlaybackToken) return;
 
         // Resolve exact player URL for chosen translation
-        const chosenVo = (detail.voiceovers || []).find((v) => v.id === state.currentPlayerState.voiceoverId || v.name === voName) || (detail.voiceovers || [])[0];
-        let balancerUrl = chosenVo?.link || currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
-        if (balancerUrl.includes("?")) {
-          balancerUrl = balancerUrl.replace(/[?&]episode=\d+/, "") + (balancerUrl.includes("?") ? `&episode=${epOrd}` : `?episode=${epOrd}`);
-        } else {
-          balancerUrl += `?episode=${epOrd}`;
+        const chosenVo =
+          (detail.voiceovers || []).find(
+            (v) => (state.currentPlayerState.voiceoverId && v.id === state.currentPlayerState.voiceoverId) ||
+                   (state.currentPlayerState.voiceoverLink && v.link === state.currentPlayerState.voiceoverLink) ||
+                   (v.name && v.name.toLowerCase() === voName.toLowerCase())
+          ) || (detail.voiceovers || [])[0];
+
+        let balancerUrl = chosenVo?.link || state.currentPlayerState.voiceoverLink || currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
+
+        if (balancerUrl.startsWith("//")) {
+          balancerUrl = "https:" + balancerUrl;
         }
 
+        balancerUrl = balancerUrl.replace(/[?&]episode=\d+/, "");
+        balancerUrl += (balancerUrl.includes("?") ? `&episode=${epOrd}` : `?episode=${epOrd}`);
+
         vp.innerHTML = `
-          <div class="luma-embed-wrapper" style="position:relative; width:100%; height:100%; overflow:hidden; background:#000; border-radius:inherit;">
+          <div class="luma-clean-embed" style="position:relative; width:100%; height:100%; background:#000; border-radius:inherit; overflow:hidden;">
             <iframe
+              id="lumaActiveFrame"
               src="${escapeHtml(balancerUrl)}"
               allowfullscreen
-              allow="autoplay; encrypted-media; picture-in-picture"
-              style="position:absolute; top:-36px; left:0; width:100%; height:calc(100% + 36px); border:none; background:#000;"
-              id="lumaActiveFrame">
-            </iframe>
-
-            <div class="luma-player-ui luma-embed-hud show-controls" id="lumaPlayerUi" style="pointer-events:none;">
-              <div class="luma-player-top" style="pointer-events:auto;">
-                <span class="luma-player-ep-badge">
-                  Серия ${epOrd}: ${escapeHtml(currentEpObj.name || `Эпизод ${epOrd}`)}
-                </span>
-                <span class="meta-tag-pill" id="lumaPlayerMetaPill">
-                  ${escapeHtml(voName)} • Full HD
-                </span>
-              </div>
-
-              <div class="luma-player-bottom" style="pointer-events:auto; padding:12px 16px; background:linear-gradient(to top, rgba(10,10,18,0.92) 0%, rgba(10,10,18,0.3) 60%, transparent 100%);">
-                <div class="luma-controls-row" style="display:flex; justify-content:space-between; align-items:center;">
-                  <div class="luma-controls-left" style="display:flex; align-items:center; gap:8px;">
-                    <button type="button" class="luma-pill-ctrl" id="lumaPrevEpBtn" title="Предыдущая серия (P)">
-                      ← Пред.
-                    </button>
-                    <button type="button" class="luma-pill-ctrl" id="lumaNextEpBtn" title="Следующая серия (N)">
-                      След. →
-                    </button>
-                    <span class="luma-time-label" style="font-size:0.8rem; color:var(--text-secondary); margin-left:6px;">
-                      Серия ${epOrd} из ${detail.total_available_episodes}
-                    </span>
-                  </div>
-
-                  <div class="luma-controls-right" style="display:flex; align-items:center; gap:8px;">
-                    <button type="button" class="luma-pill-ctrl ${state.currentPlayerState.autoplay !== false ? "active" : ""}" id="lumaAutoplayBtn" title="Автопереход к следующей серии">
-                      ${state.currentPlayerState.autoplay !== false ? "Авто: ВКЛ" : "Авто: ВЫКЛ"}
-                    </button>
-                    <button type="button" class="luma-ctrl-btn" id="lumaFullscreenBtn" title="На весь экран (F)">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;">
-                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+              style="width:100%; height:100%; border:none; background:#000; display:block;"
+            ></iframe>
           </div>
         `;
 
-        if (statusText) statusText.textContent = `LumaPlayer • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
-
-        bindBalancerHudControls(vp);
+        if (statusText) {
+          statusText.textContent = `Плеер Kodik • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${chosenVo?.name || state.currentPlayerState.voiceoverName}`;
+        }
         return;
       }
 

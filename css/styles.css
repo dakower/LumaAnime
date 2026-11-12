@@ -265,13 +265,13 @@ button {
 .search-wrapper {
   position: relative;
   flex: 1 1 360px;
-  min-width: 260px;
-  max-width: 520px;
+  min-width: 320px;
+  max-width: 540px;
   transition: max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .search-wrapper:focus-within {
-  max-width: 580px;
+  max-width: 600px;
 }
 
 .search-icon {
@@ -291,9 +291,9 @@ button {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 0 40px 0 38px;
-  font-size: 0.92rem;
-  color: var(--text-primary);
+  padding: 0 38px 0 38px;
+  font-size: 0.94rem;
+  color: #ffffff;
   box-sizing: border-box;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -3017,15 +3017,16 @@ button {
 
   .search-wrapper {
     flex: 1 1 auto;
-    min-width: 140px;
+    min-width: 180px;
     max-width: 100%;
     transition: all 0.22s ease;
   }
 
   .search-input {
     height: 38px;
-    font-size: 15px; /* prevents iOS zoom */
+    font-size: 14px;
     padding: 0 34px 0 34px;
+    color: #ffffff;
   }
 
   .search-icon {
@@ -3678,34 +3679,22 @@ button {
   to { transform: rotate(360deg); }
 }
 
-/* Luma Balancer Player Seamless Wrapper & HUD */
-.luma-embed-wrapper {
+/* Luma Balancer Player Clean Embed */
+.luma-clean-embed {
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
   background: #000;
   border-radius: inherit;
+  display: flex;
 }
 
-.luma-embed-wrapper iframe {
-  position: absolute;
-  top: -36px;
-  left: 0;
+.luma-clean-embed iframe {
   width: 100%;
-  height: calc(100% + 36px);
+  height: 100%;
   border: none;
   background: #000;
-}
-
-.video-viewport:not(.show-controls):not(.paused) .luma-embed-hud {
-  opacity: 0 !important;
-  pointer-events: none !important;
-  transition: opacity 0.4s ease;
-}
-
-.video-viewport.show-controls .luma-embed-hud,
-.video-viewport.paused .luma-embed-hud {
-  opacity: 1 !important;
-  transition: opacity 0.25s ease;
+  display: block;
+  flex: 1;
 }
