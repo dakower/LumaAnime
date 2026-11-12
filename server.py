@@ -192,12 +192,12 @@ def enrich_with_anilist_artwork(items, force_refresh=False):
         prev = img.get("preview") or ""
 
         shiki_poster = (
-            f"https://shikimori.one{orig}"
+            f"https://shikimori.io{orig}"
             if orig and "missing" not in orig
             else None
         )
         shiki_preview = (
-            f"https://shikimori.one{prev}"
+            f"https://shikimori.io{prev}"
             if prev and "missing" not in prev
             else None
         )
@@ -339,7 +339,7 @@ def fetch_shikimori_animes(params_dict, force_refresh=False):
         if cached is not None:
             return cached
 
-    url = f"https://shikimori.one/api/animes?{query_str}"
+    url = f"https://shikimori.io/api/animes?{query_str}"
     data = http_get_json(url, timeout=10)
     if isinstance(data, list):
         if search_query:
@@ -468,7 +468,7 @@ def extract_anime_seasons(anime_id):
     """
     if not anime_id:
         return []
-    url = f"https://shikimori.one/api/animes/{anime_id}/franchise"
+    url = f"https://shikimori.io/api/animes/{anime_id}/franchise"
     data = http_get_json(url, timeout=6)
     if not isinstance(data, dict):
         return []
@@ -524,13 +524,13 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
             return cached
 
     # 1. Main details from Shikimori with automatic retry and resilient fallback
-    details = http_get_json(f"https://shikimori.one/api/animes/{anime_id}", timeout=8)
+    details = http_get_json(f"https://shikimori.io/api/animes/{anime_id}", timeout=8)
     if not details or not isinstance(details, dict) or not details.get("id"):
         time.sleep(0.3)
         details = http_get_json(f"https://shikimori.me/api/animes/{anime_id}", timeout=8)
     if not details or not isinstance(details, dict) or not details.get("id"):
         time.sleep(0.3)
-        details = http_get_json(f"https://shikimori.one/api/animes/{anime_id}", timeout=8)
+        details = http_get_json(f"https://shikimori.io/api/animes/{anime_id}", timeout=8)
     if not details or not isinstance(details, dict) or not details.get("id"):
         cached = cache_get(cache_key)
         if cached:
@@ -647,7 +647,7 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
     def get_similar():
         try:
             sim = http_get_json(
-                f"https://shikimori.one/api/animes/{anime_id}/similar", timeout=8
+                f"https://shikimori.io/api/animes/{anime_id}/similar", timeout=8
             )
             if isinstance(sim, list):
                 sim = sim[:14]
@@ -659,7 +659,7 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
     def get_related():
         try:
             rel = http_get_json(
-                f"https://shikimori.one/api/animes/{anime_id}/related", timeout=8
+                f"https://shikimori.io/api/animes/{anime_id}/related", timeout=8
             )
             if isinstance(rel, list):
                 VALID_FRANCHISE_RELATIONS = {
@@ -691,7 +691,7 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
     def get_roles():
         try:
             roles = http_get_json(
-                f"https://shikimori.one/api/animes/{anime_id}/roles", timeout=8
+                f"https://shikimori.io/api/animes/{anime_id}/roles", timeout=8
             )
             if isinstance(roles, list):
                 chars = [
@@ -706,7 +706,7 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
                     img = ch.get("image") or {}
                     orig = img.get("original") or img.get("preview") or ""
                     ch["avatar_url"] = (
-                        f"https://shikimori.one{orig}"
+                        f"https://shikimori.io{orig}"
                         if orig and "missing" not in orig
                         else ""
                     )
@@ -827,8 +827,8 @@ def fetch_anime_full_details(anime_id, force_refresh=False):
         if orig:
             screenshots.append(
                 {
-                    "original": f"https://shikimori.one{orig}",
-                    "preview": f"https://shikimori.one{prev}" if prev else f"https://shikimori.one{orig}",
+                    "original": f"https://shikimori.io{orig}",
+                    "preview": f"https://shikimori.io{prev}" if prev else f"https://shikimori.io{orig}",
                 }
             )
     details["screenshots_clean"] = screenshots
@@ -1090,7 +1090,7 @@ def fetch_home_curated(force_refresh=False):
 
     def load_calendar():
         try:
-            cal = http_get_json("https://shikimori.one/api/calendar", timeout=10)
+            cal = http_get_json("https://shikimori.io/api/calendar", timeout=10)
             if isinstance(cal, list):
                 trimmed = cal[:32]
                 enrich_with_anilist_artwork(trimmed, force_refresh=force_refresh)
@@ -1500,7 +1500,7 @@ class LumaAnimeHandler(SimpleHTTPRequestHandler):
             elif path == "/api/genres":
                 cached = cache_get("genres_list")
                 if cached is None:
-                    raw_genres = http_get_json("https://shikimori.one/api/genres", timeout=10)
+                    raw_genres = http_get_json("https://shikimori.io/api/genres", timeout=10)
                     cached = [
                         g
                         for g in (raw_genres or [])

@@ -34,15 +34,15 @@
   }
 
   const DEFAULT_STARTER_HOME = [
-    { id: 16498, name: "Shingeki no Kyojin", russian: "Атака титанов", score: "8.5", kind: "tv", episodes: 25, poster_url: "https://shikimori.one/system/animes/original/16498.jpg?1711973439", banner_url: "https://shikimori.one/system/animes/original/16498.jpg?1711973439" },
-    { id: 5114, name: "Fullmetal Alchemist: Brotherhood", russian: "Стальной алхимик: Братство", score: "9.1", kind: "tv", episodes: 64, poster_url: "https://shikimori.one/system/animes/original/5114.jpg?1711949773", banner_url: "https://shikimori.one/system/animes/original/5114.jpg?1711949773" },
-    { id: 30276, name: "One Punch Man", russian: "Ванпанчмен", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/30276.jpg?1711967568", banner_url: "https://shikimori.one/system/animes/original/30276.jpg?1711967568" },
-    { id: 38000, name: "Kimetsu no Yaiba", russian: "Клинок, рассекающий демонов", score: "8.5", kind: "tv", episodes: 26, poster_url: "https://shikimori.one/system/animes/original/38000.jpg?1711958556", banner_url: "https://shikimori.one/system/animes/original/38000.jpg?1711958556" },
-    { id: 40748, name: "Jujutsu Kaisen", russian: "Магическая битва", score: "8.6", kind: "tv", episodes: 24, poster_url: "https://shikimori.one/system/animes/original/40748.jpg?1711953835", banner_url: "https://shikimori.one/system/animes/original/40748.jpg?1711953835" },
-    { id: 44511, name: "Chainsaw Man", russian: "Человек-бензопила", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/44511.jpg?1711954497", banner_url: "https://shikimori.one/system/animes/original/44511.jpg?1711954497" },
-    { id: 52991, name: "Sousou no Frieren", russian: "Провожающая в последний путь Фрирен", score: "9.3", kind: "tv", episodes: 28, poster_url: "https://shikimori.one/system/animes/original/52991.jpg?1711953112", banner_url: "https://shikimori.one/system/animes/original/52991.jpg?1711953112" },
-    { id: 21, name: "One Piece", russian: "Ван-Пис", score: "8.7", kind: "tv", episodes: 1180, poster_url: "https://shikimori.one/system/animes/original/21.jpg?1711954707", banner_url: "https://shikimori.one/system/animes/original/21.jpg?1711954707" },
-    { id: 52299, name: "Ore dake Level Up na Ken", russian: "Поднятие уровня в одиночку", score: "8.3", kind: "tv", episodes: 12, poster_url: "https://shikimori.one/system/animes/original/52299.jpg?1711953046", banner_url: "https://shikimori.one/system/animes/original/52299.jpg?1711953046" }
+    { id: 16498, name: "Shingeki no Kyojin", russian: "Атака титанов", score: "8.5", kind: "tv", episodes: 25, poster_url: "https://shikimori.io/system/animes/original/16498.jpg?1711973439", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/16498-8jpFCOcDmneX.jpg" },
+    { id: 5114, name: "Fullmetal Alchemist: Brotherhood", russian: "Стальной алхимик: Братство", score: "9.1", kind: "tv", episodes: 64, poster_url: "https://shikimori.io/system/animes/original/5114.jpg?1711949773", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/5114-q0V5URebphSG.jpg" },
+    { id: 30276, name: "One Punch Man", russian: "Ванпанчмен", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.io/system/animes/original/30276.jpg?1711967568", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/21087-sHb9zUZFsHe1.jpg" },
+    { id: 38000, name: "Kimetsu no Yaiba", russian: "Клинок, рассекающий демонов", score: "8.5", kind: "tv", episodes: 26, poster_url: "https://shikimori.io/system/animes/original/38000.jpg?1711958556", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/101922-33MtJGsUSxga.jpg" },
+    { id: 40748, name: "Jujutsu Kaisen", russian: "Магическая битва", score: "8.6", kind: "tv", episodes: 24, poster_url: "https://shikimori.io/system/animes/original/40748.jpg?1711953835", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/113415-jQBSkxWAAk83.jpg" },
+    { id: 44511, name: "Chainsaw Man", russian: "Человек-бензопила", score: "8.5", kind: "tv", episodes: 12, poster_url: "https://shikimori.io/system/animes/original/44511.jpg?1711954497", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/127230-o8IRwCGVr9KW.jpg" },
+    { id: 52991, name: "Sousou no Frieren", russian: "Провожающая в последний путь Фрирен", score: "9.3", kind: "tv", episodes: 28, poster_url: "https://shikimori.io/system/animes/original/52991.jpg?1711953112", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/154587-ivXNJ23SM1xB.jpg" },
+    { id: 21, name: "One Piece", russian: "Ван-Пис", score: "8.7", kind: "tv", episodes: 1180, poster_url: "https://shikimori.io/system/animes/original/21.jpg?1711954707", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/21-wf37VakJmZqs.jpg" },
+    { id: 52299, name: "Ore dake Level Up na Ken", russian: "Поднятие уровня в одиночку", score: "8.3", kind: "tv", episodes: 12, poster_url: "https://shikimori.io/system/animes/original/52299.jpg?1711953046", banner_url: "https://s4.anilist.co/file/anilistcdn/media/anime/banner/151807-37yfQA3ym8PA.jpg" }
   ];
 
   // =========================================================================
@@ -523,7 +523,7 @@
   function getPoster(anime) {
     if (anime.poster_url) return anime.poster_url;
     if (anime.image && anime.image.original && !anime.image.original.includes("missing")) {
-      return `https://shikimori.one${anime.image.original}`;
+      return `https://shikimori.io${anime.image.original}`;
     }
     return "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg";
   }
@@ -655,7 +655,7 @@
       // 1. Instant 0ms Render from Cache or Starter Bundle
       let cached = null;
       try {
-        const raw = localStorage.getItem("luma_home_cache_v3");
+        const raw = localStorage.getItem("luma_home_cache_v4");
         if (raw) cached = JSON.parse(raw);
       } catch (_) {}
 
@@ -670,7 +670,7 @@
 
       applyHomeData(initialData);
 
-      // 2. Fast background update from shikimori.one
+      // 2. Fast background update from shikimori.io
       fetchFreshHomeData(forceRefresh);
     } catch (err) {
       console.error("initHomeView error:", err);
@@ -693,29 +693,18 @@
       ...(data.top_rated || []),
     ];
     const seenIds = new Set();
-    state.animeBannerList = allCandidates.filter((a) => {
-      if (!a || !a.id || seenIds.has(a.id)) return false;
-      seenIds.add(a.id);
-      return a.banner_url && a.banner_url !== a.poster_url;
+    state.animeBannerList = [];
+    allCandidates.forEach((a) => {
+      if (a && a.id && !seenIds.has(a.id)) {
+        seenIds.add(a.id);
+        state.animeBannerList.push(a);
+      }
     });
-
-    if (state.animeBannerList.length < 9) {
-      allCandidates.forEach((a) => {
-        if (a && a.id && !seenIds.has(a.id)) {
-          seenIds.add(a.id);
-          state.animeBannerList.push(a);
-        }
-      });
-    }
 
     renderAnimeBanners(0);
     startAnimeBannerRotation();
 
-    state.wideShowcaseList = (
-      state.animeBannerList.length >= 6
-        ? state.animeBannerList
-        : allCandidates
-    ).slice(0, 6);
+    state.wideShowcaseList = state.animeBannerList.slice(0, 6);
     renderWideShowcaseBanner(0);
     startWideShowcaseRotation();
 
@@ -724,6 +713,46 @@
     if (ongoingGrid) renderAnimeGrid(ongoingGrid, (data.ongoing_top || []).slice(0, 12));
     if (topRatedGrid) renderAnimeGrid(topRatedGrid, (data.top_rated || []).slice(0, 12));
     renderFreshDubGrid(data.recent_anilibria || []);
+  }
+
+  async function enrichAnimeWithAniListBanners(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    const needBanners = items.filter((a) => a && a.id && (!a.banner_url || a.banner_url === a.poster_url));
+    if (!needBanners.length) return;
+    const ids = Array.from(new Set(needBanners.map((a) => Number(a.id)).filter((id) => id > 0))).slice(0, 50);
+    if (!ids.length) return;
+
+    try {
+      const query = `query ($ids: [Int]) {
+        Page(page: 1, perPage: 50) {
+          media(idMal_in: $ids, type: ANIME) {
+            idMal
+            bannerImage
+          }
+        }
+      }`;
+      const res = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, variables: { ids } })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const mediaList = json?.data?.Page?.media || [];
+        const bannerMap = new Map();
+        mediaList.forEach((m) => {
+          if (m.idMal && m.bannerImage) {
+            bannerMap.set(Number(m.idMal), m.bannerImage);
+          }
+        });
+        items.forEach((a) => {
+          if (a && a.id) {
+            const b = bannerMap.get(Number(a.id));
+            if (b) a.banner_url = b;
+          }
+        });
+      }
+    } catch (_) {}
   }
 
   async function fetchFreshHomeData(forceRefresh = false) {
@@ -742,9 +771,9 @@
     if (!data || !data.ongoing_top || data.ongoing_top.length === 0) {
       try {
         const [ongoing, popular, topRated, alData] = await Promise.all([
-          fastFetchJson("https://shikimori.one/api/animes?order=popularity&limit=16&status=ongoing", 2800),
-          fastFetchJson("https://shikimori.one/api/animes?order=popularity&limit=16", 2800),
-          fastFetchJson("https://shikimori.one/api/animes?order=ranked&limit=16", 2800),
+          fastFetchJson("https://shikimori.io/api/animes?order=popularity&limit=16&status=ongoing", 2800),
+          fastFetchJson("https://shikimori.io/api/animes?order=popularity&limit=16", 2800),
+          fastFetchJson("https://shikimori.io/api/animes?order=ranked&limit=16", 2800),
           fastFetchJson("https://anilibria.top/api/v1/anime/schedule/now", 2800)
         ]);
 
@@ -781,9 +810,15 @@
     }
 
     if (data && data.ongoing_top && data.ongoing_top.length > 0) {
+      const allToEnrich = [
+        ...(data.ongoing_top || []),
+        ...(data.popular_all_time || []),
+        ...(data.top_rated || [])
+      ];
+      await enrichAnimeWithAniListBanners(allToEnrich);
       applyHomeData(data);
       try {
-        localStorage.setItem("luma_home_cache_v3", JSON.stringify(data));
+        localStorage.setItem("luma_home_cache_v4", JSON.stringify(data));
       } catch (_) {}
     }
   }
@@ -1032,8 +1067,8 @@
     }
     if (!items || !items.length) {
       try {
-        const res = await fetch(`https://shikimori.one/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`)
-          .catch(() => fetch(`https://shikimori.one/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`));
+        const res = await fetch(`https://shikimori.io/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`)
+          .catch(() => fetch(`https://shikimori.io/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`));
         if (res && res.ok) items = await res.json();
       } catch (_) {}
     }
@@ -1302,7 +1337,7 @@
     }
 
     if (!items) {
-      let targetUrl = `https://shikimori.one/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}`;
+      let targetUrl = `https://shikimori.io/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}`;
       if (state.catalog.search) targetUrl += `&search=${encodeURIComponent(state.catalog.search)}`;
       if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
       if (state.catalog.kind) targetUrl += `&kind=${state.catalog.kind}`;
@@ -1445,7 +1480,7 @@
       } catch (_) {}
       if (!calendarItems.length) {
         try {
-          const cRes = await fetch("https://shikimori.one/api/calendar").catch(() => fetch("https://shikimori.one/api/calendar"));
+          const cRes = await fetch("https://shikimori.io/api/calendar").catch(() => fetch("https://shikimori.io/api/calendar"));
           if (cRes && cRes.ok) {
             calendarItems = await cRes.json();
           }
@@ -1544,17 +1579,33 @@
   // =========================================================================
   async function fetchClientSideAnimeDetail(animeId) {
     try {
-      const shikiResp = await fetch(`https://shikimori.one/api/animes/${animeId}`, {
-        headers: { Accept: "application/json" }
-      }).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}`));
+      const shikiResp = await fetch(`https://shikimori.io/api/animes/${animeId}`)
+        .catch(() => fetch(`https://shikimori.io/api/animes/${animeId}`));
       if (!shikiResp || !shikiResp.ok) return null;
       const details = await shikiResp.json();
       if (!details || !details.id) return null;
 
+      // Enrich anime detail with AniList 1080p widescreen banner
+      try {
+        const alRes = await fetch("https://graphql.anilist.co", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: `query ($id: Int) { Media(idMal: $id, type: ANIME) { bannerImage } }`,
+            variables: { id: Number(animeId) }
+          })
+        }).catch(() => null);
+        if (alRes && alRes.ok) {
+          const alJson = await alRes.json().catch(() => null);
+          const bImg = alJson?.data?.Media?.bannerImage;
+          if (bImg) details.banner_url = bImg;
+        }
+      } catch (_) {}
+
       // Extract franchise & seasons if available
       let seasons = [];
       try {
-        const frResp = await fetch(`https://shikimori.one/api/animes/${animeId}/franchise`).catch(() => null);
+        const frResp = await fetch(`https://shikimori.io/api/animes/${animeId}/franchise`).catch(() => null);
         if (frResp && frResp.ok) {
           const frData = await frResp.json();
           if (frData && Array.isArray(frData.nodes)) {
@@ -1765,8 +1816,8 @@
       let similar = [];
       try {
         const [relRes, simRes] = await Promise.all([
-          fetch(`https://shikimori.one/api/animes/${animeId}/related`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/related`)).catch(() => null),
-          fetch(`https://shikimori.one/api/animes/${animeId}/similar`).catch(() => fetch(`https://shikimori.one/api/animes/${animeId}/similar`)).catch(() => null),
+          fetch(`https://shikimori.io/api/animes/${animeId}/related`).catch(() => fetch(`https://shikimori.io/api/animes/${animeId}/related`)).catch(() => null),
+          fetch(`https://shikimori.io/api/animes/${animeId}/similar`).catch(() => fetch(`https://shikimori.io/api/animes/${animeId}/similar`)).catch(() => null),
         ]);
         if (relRes && relRes.ok) {
           const rawRel = await relRes.json().catch(() => []);
@@ -3488,7 +3539,7 @@
       timer = setTimeout(async () => {
         try {
           let items = null;
-          items = await fastFetchJson(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=10`, 1800);
+          items = await fastFetchJson(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=10`, 1800);
           if (Array.isArray(items)) items = rerankSearchResultsClient(items, q).slice(0, 8);
           const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
           if (isLocal) {
@@ -3502,8 +3553,8 @@
           }
           if (!items) {
             try {
-              const shikiRes = await fetch(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=15`)
-                .catch(() => fetch(`https://shikimori.one/api/animes?search=${encodeURIComponent(q)}&limit=15`));
+              const shikiRes = await fetch(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=15`)
+                .catch(() => fetch(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=15`));
               if (shikiRes && shikiRes.ok) {
                 const raw = await shikiRes.json();
                 items = rerankSearchResultsClient(raw, q).slice(0, 8);
