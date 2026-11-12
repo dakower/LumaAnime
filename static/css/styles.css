@@ -3677,3 +3677,35 @@ button {
 @keyframes lumaSpin {
   to { transform: rotate(360deg); }
 }
+
+/* Luma Balancer Player Seamless Wrapper & HUD */
+.luma-embed-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  border-radius: inherit;
+}
+
+.luma-embed-wrapper iframe {
+  position: absolute;
+  top: -36px;
+  left: 0;
+  width: 100%;
+  height: calc(100% + 36px);
+  border: none;
+  background: #000;
+}
+
+.video-viewport:not(.show-controls):not(.paused) .luma-embed-hud {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.4s ease;
+}
+
+.video-viewport.show-controls .luma-embed-hud,
+.video-viewport.paused .luma-embed-hud {
+  opacity: 1 !important;
+  transition: opacity 0.25s ease;
+}

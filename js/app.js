@@ -214,6 +214,7 @@
   // 2. Application State & LocalStorage Persistence
   // =========================================================================
   const state = {
+    detailCache: {},
     currentView: "home",
     homeData: null,
     heroItems: [],
@@ -1577,125 +1578,108 @@
   // =========================================================================
   // 10. Anime Detail Page & LumaPlayer (Full Uncut Episodes + Live Sync + Working Voiceover Switcher)
   // =========================================================================
+
+  async function fetchAniListBanner(animeId) {
+    try {
+      const res = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `query ($id: Int) { Media(idMal: $id, type: ANIME) { bannerImage } }`,
+          variables: { id: Number(animeId) }
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return json?.data?.Media?.bannerImage || null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  async function fetchAniLibriaReleases(qName, animeId) {
+    try {
+      const alSearch = await fastFetchJson(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(qName)}`, 1600);
+      if (!Array.isArray(alSearch) || !alSearch.length) return null;
+      const cleanQ = (qName || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
+      const match = alSearch.find((x) => {
+        if (String(x.shikimori?.id) === String(animeId) || String(x.mal?.id) === String(animeId)) return true;
+        const ru = (x.name?.main || x.names?.ru || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
+        return ru.length > 2 && (ru === cleanQ || cleanQ.includes(ru) || ru.includes(cleanQ));
+      });
+      if (!match || !match.id) return null;
+      const rel = await fastFetchJson(`https://anilibria.top/api/v1/anime/releases/${match.id}`, 1600);
+      if (!rel || !Array.isArray(rel.episodes)) return null;
+      return {
+        release_id: match.id,
+        episodes: rel.episodes.map(ep => ({
+          ordinal: ep.ordinal,
+          name: ep.name || `Серия ${ep.ordinal}`,
+          duration: ep.duration,
+          hls_1080: ep.hls_1080,
+          hls_720: ep.hls_720,
+          hls_480: ep.hls_480,
+          opening: ep.opening,
+          ending: ep.ending,
+          preview: ep.preview?.src ? `https://anilibria.top${ep.preview.src}` : null
+        }))
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function fetchClientSideAnimeDetail(animeId) {
     try {
+      // 1. Fetch main Shikimori info (fast, ~0.25s)
       const shikiResp = await fetch(`https://shikimori.io/api/animes/${animeId}`)
         .catch(() => fetch(`https://shikimori.io/api/animes/${animeId}`));
       if (!shikiResp || !shikiResp.ok) return null;
       const details = await shikiResp.json();
       if (!details || !details.id) return null;
 
-      // Enrich anime detail with AniList 1080p widescreen banner
-      try {
-        const alRes = await fetch("https://graphql.anilist.co", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            query: `query ($id: Int) { Media(idMal: $id, type: ANIME) { bannerImage } }`,
-            variables: { id: Number(animeId) }
-          })
-        }).catch(() => null);
-        if (alRes && alRes.ok) {
-          const alJson = await alRes.json().catch(() => null);
-          const bImg = alJson?.data?.Media?.bannerImage;
-          if (bImg) details.banner_url = bImg;
-        }
-      } catch (_) {}
+      const qName = details.russian || details.name;
+      const kodikToken = "a0457eb45312af80bbb9f3fb33de3e93";
 
-      // Extract franchise & seasons if available
+      // 2. Fetch all secondary enrichments concurrently in parallel!
+      const [bannerRes, frRes, kodikRes, alRes, relRes, simRes] = await Promise.allSettled([
+        fetchAniListBanner(animeId),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/franchise`, 1800),
+        fastFetchJson(`https://kodik-api.com/search?token=${kodikToken}&shikimori_id=${animeId}&with_episodes=true`, 1800),
+        fetchAniLibriaReleases(qName, animeId),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/related`, 1800),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/similar`, 1800),
+      ]);
+
+      if (bannerRes.status === "fulfilled" && bannerRes.value) {
+        details.banner_url = bannerRes.value;
+      }
+
+      // Franchise
       let seasons = [];
-      try {
-        const frResp = await fetch(`https://shikimori.io/api/animes/${animeId}/franchise`).catch(() => null);
-        if (frResp && frResp.ok) {
-          const frData = await frResp.json();
-          if (frData && Array.isArray(frData.nodes)) {
-            const tvNodes = frData.nodes.filter((n) => {
-              const k = (n.kind || "").toLowerCase();
-              const nm = (n.name || "").toLowerCase();
-              if (["клип", "реклама", "промо", "спецвыпуск", "фильм", "movie"].some((b) => k.includes(b))) return false;
-              if (["recap", "рекап", "chibi", "тиби", "чиби", "snickers"].some((b) => nm.includes(b))) return false;
-              return k.includes("tv") || k.includes("сериал");
-            });
-            tvNodes.sort((a, b) => (a.year || 9999) - (b.year || 9999));
-            if (tvNodes.length > 1) {
-              seasons = tvNodes.map((node, idx) => ({
-                season_number: idx + 1,
-                id: node.id,
-                name: node.name,
-                year: node.year,
-                is_current: Number(node.id) === Number(animeId)
-              }));
-            }
-          }
+      if (frRes.status === "fulfilled" && frRes.value && Array.isArray(frRes.value.nodes)) {
+        const tvNodes = frRes.value.nodes.filter((n) => {
+          const k = (n.kind || "").toLowerCase();
+          const nm = (n.name || "").toLowerCase();
+          if (["клип", "реклама", "промо", "спецвыпуск", "фильм", "movie"].some((b) => k.includes(b))) return false;
+          if (["recap", "рекап", "chibi", "тиби", "чиби", "snickers"].some((b) => nm.includes(b))) return false;
+          return k.includes("tv") || k.includes("сериал");
+        });
+        tvNodes.sort((a, b) => (a.year || 9999) - (b.year || 9999));
+        if (tvNodes.length > 1) {
+          seasons = tvNodes.map((node, idx) => ({
+            season_number: idx + 1,
+            id: node.id,
+            name: node.name,
+            year: node.year,
+            is_current: Number(node.id) === Number(animeId)
+          }));
         }
-      } catch (_) {}
+      }
 
-      // Check AniLibria releases for Russian direct stream
-      let anilibriaData = null;
-      try {
-        const qName = details.russian || details.name;
-        const alSearch = await fetch(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(qName)}`).catch(() => null);
-        if (alSearch && alSearch.ok) {
-          const alList = await alSearch.json();
-          if (Array.isArray(alList) && alList.length > 0) {
-            const cleanQ = (qName || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
-            const match = alList.find((x) => {
-              if (String(x.shikimori?.id) === String(animeId) || String(x.mal?.id) === String(animeId)) return true;
-              const ru = (x.names?.ru || x.name || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
-              const en = (x.names?.en || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
-              return ru.length > 2 && (ru === cleanQ || cleanQ.includes(ru) || ru.includes(cleanQ));
-            });
-            if (match && match.id) {
-              const relResp = await fetch(`https://anilibria.top/api/v1/anime/releases/${match.id}`).catch(() => null);
-              if (relResp && relResp.ok) {
-                const rel = await relResp.json();
-                if (rel && rel.episodes) {
-                  anilibriaData = {
-                    release_id: match.id,
-                    episodes: rel.episodes.map(ep => ({
-                      ordinal: ep.ordinal,
-                      name: ep.name || `Серия ${ep.ordinal}`,
-                      duration: ep.duration,
-                      hls_1080: ep.hls_1080,
-                      hls_720: ep.hls_720,
-                      hls_480: ep.hls_480,
-                      opening: ep.opening,
-                      ending: ep.ending,
-                      preview: ep.preview?.src ? `https://anilibria.top${ep.preview.src}` : null
-                    }))
-                  };
-                }
-              }
-            }
-          }
-        }
-      } catch (_) {}
+      const anilibriaData = alRes.status === "fulfilled" ? alRes.value : null;
 
-      // Fetch Kitsu canonical titles if available
-      let kitsuTitles = {};
-      try {
-        const kMapResp = await fetch(`https://kitsu.io/api/edge/mappings?filter[external_site]=myanimelist/anime&filter[external_id]=${animeId}&include=item`, {
-          headers: { Accept: "application/vnd.api+json" }
-        }).catch(() => null);
-        if (kMapResp && kMapResp.ok) {
-          const kMap = await kMapResp.json();
-          const kId = (kMap.included || []).find((x) => x.type === "anime")?.id || kMap.included?.[0]?.id;
-          if (kId) {
-            const kEpsResp = await fetch(`https://kitsu.io/api/edge/anime/${kId}/episodes?page[limit]=20&fields[episodes]=number,canonicalTitle,titles`, {
-              headers: { Accept: "application/vnd.api+json" }
-            }).catch(() => null);
-            if (kEpsResp && kEpsResp.ok) {
-              const kData = await kEpsResp.json();
-              (kData.data || []).forEach((item) => {
-                const num = item.attributes?.number;
-                const title = item.attributes?.canonicalTitle || item.attributes?.titles?.en_us || item.attributes?.titles?.en_jp;
-                if (num && title) kitsuTitles[Number(num)] = title.trim();
-              });
-            }
-          }
-        }
-      } catch (_) {}
-
+      // Episodes calculation
       const isMovie = (details.kind || "").toLowerCase() === "movie" || (details.kind || "").toLowerCase() === "фильм";
       const isAnons = (details.status || "").toLowerCase() === "anons";
       let totalEp = 1;
@@ -1713,48 +1697,14 @@
         totalEp = 1;
       }
       totalEp = Math.min(Math.max(totalEp, 0), 3000);
-      const alMap = {};
-      if (anilibriaData && anilibriaData.episodes) {
-        anilibriaData.episodes.forEach((e) => {
-          alMap[e.ordinal] = e;
-        });
-      }
 
-      const fullEps = [];
-      for (let i = 1; i <= totalEp; i++) {
-        const alEp = alMap[i];
-        const alName = alEp?.name || "";
-        const isGeneric = !alName || /^(серия|эпизод|episode)\s*\d+$/i.test(alName.trim());
-        const kTitle = kitsuTitles[i];
-        let epTitle = `Серия ${i}`;
-        if (kTitle && isGeneric) {
-          epTitle = kTitle;
-        } else if (alName && !isGeneric) {
-          epTitle = alName;
-        } else if (kTitle) {
-          epTitle = kTitle;
-        }
-
-        fullEps.push({
-          ordinal: i,
-          name: epTitle,
-          has_hls: Boolean(alEp && (alEp.hls_1080 || alEp.hls_720 || alEp.hls_480)),
-          hls_1080: alEp?.hls_1080 || null,
-          hls_720: alEp?.hls_720 || null,
-          hls_480: alEp?.hls_480 || null,
-          opening: alEp?.opening || null,
-          ending: alEp?.ending || null,
-          preview: alEp?.preview || details.banner_url || getPoster(details),
-          kodik_link: `https://kodikplayer.com/find-player?shikimoriID=${animeId}&episode=${i}`,
-          duration: (alEp && alEp.duration) || 1440,
-        });
-      }
-
+      // Assemble all voiceovers with real direct links!
       const voiceovers = [];
       if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0) {
         voiceovers.push({
           id: "anilibria_hls",
           name: "AniLibria.TV (Прямой поток 1080p FHD)",
+          link: null,
           type: "hls",
           ep_min: 1,
           ep_max: anilibriaData.episodes.length,
@@ -1763,72 +1713,99 @@
         });
       }
 
-      // Query Kodik API for active studios for this anime
-      let kodikFoundStudios = [];
-      try {
-        const kodikUrl = `https://kodik-api.com/get-player?token=447d179e875efe44217f20d1ee2146be&shikimoriID=${animeId}&episode=1`;
-        const kResp = await fetch(kodikUrl).catch(() => null);
-        if (kResp && kResp.ok) {
-          const kData = await kResp.json();
-          if (kData && kData.translation) {
-            kodikFoundStudios.push(kData.translation);
-          }
-        }
-        if (totalEp > 1) {
-          const kEndResp = await fetch(`https://kodik-api.com/get-player?token=447d179e875efe44217f20d1ee2146be&shikimoriID=${animeId}&episode=${totalEp}`).catch(() => null);
-          if (kEndResp && kEndResp.ok) {
-            const kEndData = await kEndResp.json();
-            if (kEndData && kEndData.translation && !kodikFoundStudios.includes(kEndData.translation)) {
-              kodikFoundStudios.push(kEndData.translation);
-            }
-          }
-        }
-      } catch (_) {}
+      const kodikSearchData = kodikRes.status === "fulfilled" ? kodikRes.value : null;
+      if (kodikSearchData && Array.isArray(kodikSearchData.results) && kodikSearchData.results.length > 0) {
+        const seenTitles = new Set();
+        kodikSearchData.results.forEach((r) => {
+          const t = r.translation || {};
+          const title = (t.title || "").trim();
+          if (!title || seenTitles.has(title.toLowerCase())) return;
+          seenTitles.add(title.toLowerCase());
 
-      // Combine with Shikimori fandubbers
-      const shikiDubbers = details.fandubbers || [];
-      const allStudios = Array.from(new Set([...kodikFoundStudios, ...shikiDubbers]));
+          // Avoid duplicating AniLibria if already present as direct HLS
+          if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0 && /anilibria/i.test(title)) {
+            return;
+          }
 
-      if (allStudios.length > 0) {
-        allStudios.forEach((studioName) => {
-          if (!studioName || /anilibria/i.test(studioName)) return;
+          const rawLink = r.link || "";
+          const cleanLink = rawLink.startsWith("//") ? `https:${rawLink}` : rawLink;
+          const isSub = (t.type || "").toLowerCase().includes("sub") || /субтитр|sub/i.test(title);
+          const epCount = r.episodes_count || totalEp;
+
           voiceovers.push({
-            id: `dub_${studioName.toLowerCase().replace(/[^a-zа-я0-9]/g, "_")}`,
-            name: studioName,
-            type: "Studio",
+            id: `dub_${t.id || title.toLowerCase().replace(/[^a-zа-я0-9]/g, "_")}`,
+            name: title,
+            link: cleanLink,
+            type: isSub ? "Sub" : "Studio",
             ep_min: 1,
-            ep_max: totalEp || 1,
-            badge: totalEp > 1 ? `1–${totalEp} эп.` : "Полная озвучка",
+            ep_max: epCount,
+            badge: epCount > 1 ? `1–${epCount} эп.` : "Полная озвучка",
             available: true
           });
         });
       }
 
       if (voiceovers.length === (anilibriaData ? 1 : 0)) {
+        const shikiDubbers = details.fandubbers || [];
+        shikiDubbers.forEach((sName) => {
+          voiceovers.push({
+            id: `dub_${sName.toLowerCase().replace(/[^a-zа-я0-9]/g, "_")}`,
+            name: sName,
+            link: `https://kodikplayer.com/find-player?shikimoriID=${animeId}`,
+            type: "Studio",
+            ep_min: 1,
+            ep_max: totalEp || 1,
+            badge: "Русская озвучка",
+            available: true
+          });
+        });
+      }
+
+      if (voiceovers.length === 0) {
         voiceovers.push(
-          { id: "kodik_main", name: "Русская озвучка (Kodik)", type: "Studio", ep_min: 1, ep_max: totalEp || 1, badge: "Русская озвучка", available: true },
-          { id: "kodik_sub", name: "Оригинал + Русские субтитры", type: "Sub", ep_min: 1, ep_max: totalEp || 1, badge: "Субтитры", available: true }
+          { id: "kodik_main", name: "Русская озвучка (Kodik)", link: `https://kodikplayer.com/find-player?shikimoriID=${animeId}`, type: "Studio", ep_min: 1, ep_max: totalEp || 1, badge: "Русская озвучка", available: true },
+          { id: "kodik_sub", name: "Оригинал + Русские субтитры", link: `https://kodikplayer.com/find-player?shikimoriID=${animeId}`, type: "Sub", ep_min: 1, ep_max: totalEp || 1, badge: "Субтитры", available: true }
         );
       }
 
-      // Fetch related and similar titles in parallel
+      const defaultLink = voiceovers[0]?.link || `https://kodikplayer.com/find-player?shikimoriID=${animeId}`;
+
+      const alMap = {};
+      if (anilibriaData && anilibriaData.episodes) {
+        anilibriaData.episodes.forEach((e) => {
+          alMap[e.ordinal] = e;
+        });
+      }
+
+      const fullEps = [];
+      const defaultPreview = details.banner_url || getPoster(details);
+      for (let i = 1; i <= totalEp; i++) {
+        const alEp = alMap[i];
+        fullEps.push({
+          ordinal: i,
+          name: (alEp && alEp.name) ? alEp.name : `Серия ${i}`,
+          has_hls: Boolean(alEp && (alEp.hls_1080 || alEp.hls_720 || alEp.hls_480)),
+          hls_1080: alEp?.hls_1080 || null,
+          hls_720: alEp?.hls_720 || null,
+          hls_480: alEp?.hls_480 || null,
+          opening: alEp?.opening || null,
+          ending: alEp?.ending || null,
+          preview: alEp?.preview || defaultPreview,
+          kodik_link: defaultLink ? (defaultLink.includes("?") ? `${defaultLink}&episode=${i}` : `${defaultLink}?episode=${i}`) : `https://kodikplayer.com/find-player?shikimoriID=${animeId}&episode=${i}`,
+          duration: (alEp && alEp.duration) || 1440,
+        });
+      }
+
+      // Related / Similar
       let related = [];
+      if (relRes.status === "fulfilled" && Array.isArray(relRes.value)) {
+        const validRelations = new Set(["sequel", "prequel", "side story", "parent story", "full story", "summary", "alternative version", "alternative setting", "spin-off"]);
+        related = relRes.value.filter(r => r.anime && validRelations.has((r.relation || "").trim().toLowerCase())).slice(0, 30);
+      }
       let similar = [];
-      try {
-        const [relRes, simRes] = await Promise.all([
-          fetch(`https://shikimori.io/api/animes/${animeId}/related`).catch(() => fetch(`https://shikimori.io/api/animes/${animeId}/related`)).catch(() => null),
-          fetch(`https://shikimori.io/api/animes/${animeId}/similar`).catch(() => fetch(`https://shikimori.io/api/animes/${animeId}/similar`)).catch(() => null),
-        ]);
-        if (relRes && relRes.ok) {
-          const rawRel = await relRes.json().catch(() => []);
-          const validRelations = new Set(["sequel", "prequel", "side story", "parent story", "full story", "summary", "alternative version", "alternative setting", "spin-off"]);
-          related = (Array.isArray(rawRel) ? rawRel : []).filter(r => r.anime && validRelations.has((r.relation || "").trim().toLowerCase())).slice(0, 30);
-        }
-        if (simRes && simRes.ok) {
-          const rawSim = await simRes.json().catch(() => []);
-          similar = Array.isArray(rawSim) ? rawSim.slice(0, 14) : [];
-        }
-      } catch (_) {}
+      if (simRes.status === "fulfilled" && Array.isArray(simRes.value)) {
+        similar = simRes.value.slice(0, 14);
+      }
 
       return {
         anime: details,
@@ -1852,6 +1829,15 @@
     switchView("anime", false);
     history.replaceState(null, "", `#anime/${animeId}`);
 
+    state.detailCache = state.detailCache || {};
+
+    // Instant 0ms render if cached in memory!
+    if (!forceRefresh && state.detailCache[animeId]) {
+      state.currentAnimeDetail = state.detailCache[animeId];
+      renderAnimeDetailPage(state.detailCache[animeId]);
+      return;
+    }
+
     const container = document.getElementById("animeDetailContainer");
     container.innerHTML = `
       <div class="container" style="padding: 80px 24px; text-align:center;">
@@ -1863,24 +1849,19 @@
     `;
 
     let data = null;
-
-    // 1. Try local server only if running on localhost / 127.0.0.1
     const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal) {
+    if (isLocal && !IS_STATIC_HOST) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
         const res = await fetch(`/api/anime/${animeId}${forceRefresh ? "?refresh=1" : ""}`, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
           data = await res.json();
         }
-      } catch (e) {
-        console.warn("Local anime fetch attempt failed, switching to client fallback...", e);
-      }
+      } catch (_) {}
     }
 
-    // 2. Fallback directly to client-side Shikimori / AniLibria / Kitsu if local server failed or offline
     if (!data || !data.anime) {
       try {
         data = await fetchClientSideAnimeDetail(animeId);
@@ -1896,7 +1877,7 @@
             Не удалось загрузить аниме
           </div>
           <div style="color:var(--text-secondary); font-size:0.95rem; margin-bottom:24px; max-width:480px; margin-left:auto; margin-right:auto;">
-            Сервер Shikimori или локальный сервис временно задержал ответ. Нажмите кнопку ниже для повторной попытки.
+            Сервер Shikimori временно задержал ответ. Нажмите кнопку ниже для повторной попытки.
           </div>
           <div style="display:flex; justify-content:center; gap:12px;">
             <button type="button" class="btn btn-primary" id="retryAnimeLoadBtn">
@@ -1915,26 +1896,11 @@
     }
 
     try {
+      state.detailCache[animeId] = data;
       state.currentAnimeDetail = data;
       renderAnimeDetailPage(data);
     } catch (renderErr) {
       console.error("Critical error in renderAnimeDetailPage:", renderErr);
-      container.innerHTML = `
-        <div class="container" style="padding:80px 24px; text-align:center;">
-          <div style="font-family:'Unbounded',sans-serif; font-size:1.25rem; color:#f87171; margin-bottom:12px;">
-            Ошибка рендеринга плеера
-          </div>
-          <div style="color:var(--text-secondary); font-size:0.95rem; margin-bottom:24px;">
-            ${escapeHtml(renderErr.message || String(renderErr))}
-          </div>
-          <button type="button" class="btn btn-primary" id="retryAnimeLoadBtn">
-            Повторить попытку ↺
-          </button>
-        </div>
-      `;
-      document.getElementById("retryAnimeLoadBtn")?.addEventListener("click", () => {
-        openAnimeDetail(animeId, true);
-      });
     }
   }
 
@@ -2771,6 +2737,87 @@
     }
   }
 
+  function bindBalancerHudControls(vp) {
+    const prevEpBtn = document.getElementById("lumaPrevEpBtn");
+    const nextEpBtn = document.getElementById("lumaNextEpBtn");
+    const autoplayBtn = document.getElementById("lumaAutoplayBtn");
+    const fsBtn = document.getElementById("lumaFullscreenBtn");
+
+    const total = state.currentAnimeDetail?.total_available_episodes || 1;
+    const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
+
+    prevEpBtn?.addEventListener("click", () => {
+      if (cur > 1) {
+        state.currentPlayerState.episodeOrdinal = cur - 1;
+        populateVoiceoverDropdown(cur - 1);
+        renderEpisodesSidebarList();
+        renderPlayerViewport(true);
+        showToast(`Серия ${cur - 1}`);
+      } else {
+        showToast("Это первая серия");
+      }
+    });
+
+    nextEpBtn?.addEventListener("click", () => {
+      if (cur < total) {
+        state.currentPlayerState.episodeOrdinal = cur + 1;
+        populateVoiceoverDropdown(cur + 1);
+        renderEpisodesSidebarList();
+        renderPlayerViewport(true);
+        showToast(`Серия ${cur + 1}`);
+      } else {
+        showToast("Это последняя вышедшая серия");
+      }
+    });
+
+    autoplayBtn?.addEventListener("click", () => {
+      state.currentPlayerState.autoplay = state.currentPlayerState.autoplay === false ? true : false;
+      autoplayBtn.textContent = state.currentPlayerState.autoplay ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
+      autoplayBtn.classList.toggle("active", state.currentPlayerState.autoplay);
+      showToast(`Автопереход: ${state.currentPlayerState.autoplay ? "Включен" : "Выключен"}`);
+    });
+
+    fsBtn?.addEventListener("click", () => {
+      if (!document.fullscreenElement) {
+        vp.requestFullscreen?.();
+      } else {
+        document.exitFullscreen?.();
+      }
+    });
+
+    const resetInactivity = () => {
+      vp.classList.remove("hide-cursor");
+      vp.classList.add("show-controls");
+      if (state.hideControlsTimeout) clearTimeout(state.hideControlsTimeout);
+      state.hideControlsTimeout = setTimeout(() => {
+        vp.classList.add("hide-cursor");
+        vp.classList.remove("show-controls");
+      }, 3000);
+    };
+
+    vp.addEventListener("mousemove", resetInactivity);
+    vp.addEventListener("mouseenter", resetInactivity);
+    vp.addEventListener("touchstart", resetInactivity);
+    resetInactivity();
+
+    function handleBalancerKeydown(e) {
+      if (["input", "textarea", "select"].includes(document.activeElement?.tagName?.toLowerCase())) return;
+      if (e.key === "n" || e.key === "N" || e.key === "т" || e.key === "Т") {
+        nextEpBtn?.click();
+      } else if (e.key === "p" || e.key === "P" || e.key === "з" || e.key === "З") {
+        prevEpBtn?.click();
+      } else if (e.key === "f" || e.key === "F" || e.key === "а" || e.key === "А") {
+        fsBtn?.click();
+      }
+    }
+
+    if (state.__playerKeyHandler) {
+      document.removeEventListener("keydown", state.__playerKeyHandler);
+    }
+    document.addEventListener("keydown", handleBalancerKeydown);
+    state.__playerKeyHandler = handleBalancerKeydown;
+  }
+
   function renderPlayerViewport(autoPlayAfterSwitch = false) {
     destroyActivePlayer();
     const vp = document.getElementById("videoViewport");
@@ -2951,11 +2998,70 @@
       // Check if running on local server vs static GitHub Pages host
       const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
       if (!isLocal) {
-        // Static GitHub Pages host: immediately embed Kodik player cleanly without waiting for /api/stream 404
         if (myPlaybackToken !== state.currentPlaybackToken) return;
-        const fallbackLink = currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
-        vp.innerHTML = `<iframe src="${escapeHtml(fallbackLink)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture" style="width:100%;height:100%;border:none;background:#000;"></iframe>`;
-        if (statusText) statusText.textContent = `Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+
+        // Resolve exact player URL for chosen translation
+        const chosenVo = (detail.voiceovers || []).find((v) => v.id === state.currentPlayerState.voiceoverId || v.name === voName) || (detail.voiceovers || [])[0];
+        let balancerUrl = chosenVo?.link || currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
+        if (balancerUrl.includes("?")) {
+          balancerUrl = balancerUrl.replace(/[?&]episode=\d+/, "") + (balancerUrl.includes("?") ? `&episode=${epOrd}` : `?episode=${epOrd}`);
+        } else {
+          balancerUrl += `?episode=${epOrd}`;
+        }
+
+        vp.innerHTML = `
+          <div class="luma-embed-wrapper" style="position:relative; width:100%; height:100%; overflow:hidden; background:#000; border-radius:inherit;">
+            <iframe
+              src="${escapeHtml(balancerUrl)}"
+              allowfullscreen
+              allow="autoplay; encrypted-media; picture-in-picture"
+              style="position:absolute; top:-36px; left:0; width:100%; height:calc(100% + 36px); border:none; background:#000;"
+              id="lumaActiveFrame">
+            </iframe>
+
+            <div class="luma-player-ui luma-embed-hud show-controls" id="lumaPlayerUi" style="pointer-events:none;">
+              <div class="luma-player-top" style="pointer-events:auto;">
+                <span class="luma-player-ep-badge">
+                  Серия ${epOrd}: ${escapeHtml(currentEpObj.name || `Эпизод ${epOrd}`)}
+                </span>
+                <span class="meta-tag-pill" id="lumaPlayerMetaPill">
+                  ${escapeHtml(voName)} • Full HD
+                </span>
+              </div>
+
+              <div class="luma-player-bottom" style="pointer-events:auto; padding:12px 16px; background:linear-gradient(to top, rgba(10,10,18,0.92) 0%, rgba(10,10,18,0.3) 60%, transparent 100%);">
+                <div class="luma-controls-row" style="display:flex; justify-content:space-between; align-items:center;">
+                  <div class="luma-controls-left" style="display:flex; align-items:center; gap:8px;">
+                    <button type="button" class="luma-pill-ctrl" id="lumaPrevEpBtn" title="Предыдущая серия (P)">
+                      ← Пред.
+                    </button>
+                    <button type="button" class="luma-pill-ctrl" id="lumaNextEpBtn" title="Следующая серия (N)">
+                      След. →
+                    </button>
+                    <span class="luma-time-label" style="font-size:0.8rem; color:var(--text-secondary); margin-left:6px;">
+                      Серия ${epOrd} из ${detail.total_available_episodes}
+                    </span>
+                  </div>
+
+                  <div class="luma-controls-right" style="display:flex; align-items:center; gap:8px;">
+                    <button type="button" class="luma-pill-ctrl ${state.currentPlayerState.autoplay !== false ? "active" : ""}" id="lumaAutoplayBtn" title="Автопереход к следующей серии">
+                      ${state.currentPlayerState.autoplay !== false ? "Авто: ВКЛ" : "Авто: ВЫКЛ"}
+                    </button>
+                    <button type="button" class="luma-ctrl-btn" id="lumaFullscreenBtn" title="На весь экран (F)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+
+        if (statusText) statusText.textContent = `LumaPlayer • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+
+        bindBalancerHudControls(vp);
         return;
       }
 
