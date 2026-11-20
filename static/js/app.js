@@ -21,6 +21,77 @@
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") &&
     !IS_STATIC_HOST;
 
+  const STREAM_WORKER_URL = "https://luma-anime-stream.dakowerr.workers.dev/stream";
+
+  function canonicalizeKodikUrl(rawUrl) {
+    if (!rawUrl) return "";
+    let clean = rawUrl.trim();
+    if (clean.startsWith("//")) clean = `https:${clean}`;
+    try {
+      const u = new URL(clean);
+      u.searchParams.delete("translations");
+      u.searchParams.delete("only_episode");
+      return u.toString();
+    } catch (_) {
+      return clean;
+    }
+  }
+
+  async function resolveKodikDirectStreams(rawUrl, externalSignal = null, timeoutMs = 8000) {
+    const cleanUrl = canonicalizeKodikUrl(rawUrl);
+    if (!cleanUrl) return null;
+
+    state.streamUrlCache = state.streamUrlCache || {};
+    const cached = state.streamUrlCache[cleanUrl];
+    if (cached && cached.streams && Date.now() - cached.ts < 25 * 60 * 1000) {
+      return cached.streams;
+    }
+
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+    const onExtAbort = () => ctrl.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(tid);
+        return null;
+      }
+      externalSignal.addEventListener("abort", onExtAbort, { once: true });
+    }
+
+    try {
+      const res = await fetch(`${STREAM_WORKER_URL}?url=${encodeURIComponent(cleanUrl)}`, {
+        signal: ctrl.signal,
+      });
+      clearTimeout(tid);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.ok && data.streams && Object.keys(data.streams).length > 0) {
+        state.streamUrlCache[cleanUrl] = { streams: data.streams, ts: Date.now() };
+        return data.streams;
+      }
+    } catch (_) {
+    } finally {
+      clearTimeout(tid);
+      if (externalSignal) {
+        externalSignal.removeEventListener("abort", onExtAbort);
+      }
+    }
+    return null;
+  }
+
+  function prefetchNextEpisodeStream(detail, chosenVo, currentEpOrd) {
+    if (!detail || !chosenVo) return;
+    const nextOrd = Number(currentEpOrd) + 1;
+    if (nextOrd > (detail.total_available_episodes || 0)) return;
+    const nextUrl = chosenVo.episodesMap?.[nextOrd];
+    if (!nextUrl) return;
+    const cleanNext = canonicalizeKodikUrl(nextUrl);
+    if (state.streamUrlCache?.[cleanNext]) return;
+    setTimeout(() => {
+      resolveKodikDirectStreams(cleanNext, null, 8000).catch(() => {});
+    }, 800);
+  }
+
   async function fastFetchJson(url, timeoutMs = 2800) {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -236,6 +307,7 @@
 
     catalogCache: {},
     detailCache: {},
+    streamUrlCache: {},
     catalog: {
       page: 1,
       search: "",
@@ -3098,7 +3170,45 @@
       }
     };
 
-    const mountNativeHlsPlayer = (streamUrl, onFatalFallback = null) => {
+    const qLabels = {
+      "1080": { label: "1080p Full HD", badge: "FHD" },
+      "720": { label: "720p HD", badge: "HD" },
+      "480": { label: "480p SD", badge: "SD" },
+      "360": { label: "360p", badge: "SD" },
+    };
+
+    const syncQualityDropdownForStreams = (streamsObj, chosenQ) => {
+      const qSelect = document.getElementById("qualitySelect");
+      if (!qSelect || !streamsObj) return;
+      const availableQs = ["1080", "720", "480", "360"].filter((k) => Boolean(streamsObj[k]));
+      if (!availableQs.length) return;
+      qSelect.innerHTML = availableQs
+        .map((k) => {
+          const meta = qLabels[k] || { label: `${k}p`, badge: "" };
+          return `<option value="${k}" data-short-label="${escapeHtml(meta.label)}" data-badge="${escapeHtml(meta.badge)}">${escapeHtml(meta.label)}</option>`;
+        })
+        .join("");
+      const idx = Math.max(0, availableQs.indexOf(String(chosenQ)));
+      qSelect.selectedIndex = idx;
+      if (qSelect._refreshLumaDropdown) qSelect._refreshLumaDropdown();
+    };
+
+    const pickStreamByPreference = (streamsObj, prefQ) => {
+      const orders = {
+        "1080": ["1080", "720", "480", "360"],
+        "720": ["720", "1080", "480", "360"],
+        "480": ["480", "720", "360", "1080"],
+        "360": ["360", "480", "720", "1080"],
+      };
+      const order = orders[String(prefQ)] || orders["1080"];
+      for (const k of order) {
+        if (streamsObj[k]) return { quality: k, url: streamsObj[k] };
+      }
+      const firstKey = Object.keys(streamsObj)[0];
+      return firstKey ? { quality: firstKey, url: streamsObj[firstKey] } : null;
+    };
+
+    const mountNativeHlsPlayer = (streamUrl, actualQuality = q, onFatalFallback = null) => {
       if (qWrap) qWrap.style.display = "";
       vp.classList.add("paused");
       vp.innerHTML = `
@@ -3113,7 +3223,7 @@
               Серия ${epOrd}: ${escapeHtml(currentEpObj.name || `Эпизод ${epOrd}`)}
             </span>
             <span class="meta-tag-pill" id="lumaPlayerMetaPill">
-              ${escapeHtml(state.currentPlayerState.voiceoverName || voName)} • ${q}p
+              ${escapeHtml(state.currentPlayerState.voiceoverName || voName)} • ${escapeHtml(String(actualQuality))}p
             </span>
           </div>
 
@@ -3243,74 +3353,99 @@
         (currentEpObj.hls_1080 || currentEpObj.hls_720 || currentEpObj.hls_480)
     );
 
-    if (qWrap) qWrap.style.display = canUseNativeAnilibria ? "" : "none";
+    if (qWrap) qWrap.style.display = "";
 
-    function startPlayback() {
+    async function startPlayback() {
       const myPlaybackToken = ++state.currentPlaybackToken;
 
       // Path 1: AniLibria direct 1080p/720p/480p HLS Stream -> Native LumaPlayer!
       if (canUseNativeAnilibria) {
-        const hlsUrl =
-          (q === "1080" && currentEpObj.hls_1080) ||
-          (q === "720" && currentEpObj.hls_720) ||
-          currentEpObj.hls_480 ||
-          currentEpObj.hls_1080 ||
-          currentEpObj.hls_720;
-        const kodikFallbackVo = (detail.voiceovers || []).find((v) => v.id !== "anilibria_hls" && v.link) || findChosenVoiceover();
-        mountNativeHlsPlayer(hlsUrl, () => mountCleanKodikIframe(kodikFallbackVo));
-        if (statusText) {
-          statusText.textContent = `LumaPlayer ${q}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${voName}`;
+        const alStreams = {};
+        if (currentEpObj.hls_1080) alStreams["1080"] = currentEpObj.hls_1080;
+        if (currentEpObj.hls_720) alStreams["720"] = currentEpObj.hls_720;
+        if (currentEpObj.hls_480) alStreams["480"] = currentEpObj.hls_480;
+        const picked = pickStreamByPreference(alStreams, q);
+        if (picked) {
+          syncQualityDropdownForStreams(alStreams, picked.quality);
+          state.currentPlayerState.quality = picked.quality;
+          const kodikFallbackVo = (detail.voiceovers || []).find((v) => v.id !== "anilibria_hls" && v.link) || findChosenVoiceover();
+          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(kodikFallbackVo));
+          if (statusText) {
+            statusText.textContent = `LumaPlayer ${picked.quality}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${voName}`;
+          }
+          return;
         }
-        return;
       }
 
-      // Path 2: Static Web Host -> Clean Kodik Iframe (zero overlapping HUD!)
-      if (!USE_LOCAL_API) {
-        if (myPlaybackToken !== state.currentPlaybackToken) return;
-        mountCleanKodikIframe(findChosenVoiceover());
-        return;
+      // Path 2: ALL Kodik Voiceovers -> Extract direct HLS via Cloudflare Worker & play in OUR Native LumaPlayer!
+      const chosenVo = findChosenVoiceover();
+      const rawKodikUrl =
+        chosenVo?.episodesMap?.[epOrd] ||
+        state.currentPlayerState.voiceoverLink ||
+        chosenVo?.link ||
+        currentEpObj.kodik_link ||
+        `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
+
+      const cleanCacheKey = canonicalizeKodikUrl(rawKodikUrl);
+      const alreadyCached = Boolean(state.streamUrlCache?.[cleanCacheKey]);
+
+      if (!alreadyCached) {
+        vp.classList.remove("paused");
+        vp.innerHTML = `
+          <div class="luma-splash-screen" style="cursor:default;">
+            <div class="luma-splash-backdrop" style="background-image: url('${escapeHtml(epPreview)}');"></div>
+            <div class="luma-splash-vignette"></div>
+            <div class="luma-stream-loading" style="position:relative; z-index:2; display:flex; flex-direction:column; align-items:center; gap:12px;">
+              <div class="luma-spinner"></div>
+              <span style="color:var(--text-primary); font-size:0.9rem; font-weight:500;">Подключаем поток LumaPlayer HD...</span>
+            </div>
+          </div>
+        `;
+        if (statusText) {
+          statusText.textContent = `Загрузка потока серии ${epOrd} (${chosenVo?.name || voName})...`;
+        }
       }
 
-      // Path 3: Optional Local Dev Backend HLS extraction with clean fallback
-      if (statusText) statusText.textContent = `Подключение потока серии ${epOrd} (${voName})...`;
       state.streamAbortController = new AbortController();
       const currentSignal = state.streamAbortController.signal;
 
-      fetch(`/api/stream?anime_id=${a.id}&episode=${epOrd}&translation=${encodeURIComponent(voName)}`, { signal: currentSignal })
-        .then((r) => r.json())
-        .then((resData) => {
-          if (currentSignal.aborted || myPlaybackToken !== state.currentPlaybackToken) return;
-          const streams = resData?.streams || {};
-          const streamUrl =
-            (q === "1080" && streams["1080"]) ||
-            (q === "720" && streams["720"]) ||
-            streams["720"] ||
-            streams["480"] ||
-            streams["360"] ||
-            Object.values(streams)[0];
+      let streams = await resolveKodikDirectStreams(rawKodikUrl, currentSignal, 8000);
+      if (currentSignal.aborted || myPlaybackToken !== state.currentPlaybackToken) return;
 
-          if (!streamUrl) {
-            mountCleanKodikIframe(findChosenVoiceover(), resData?.fallback_player ? buildCleanKodikUrl({ link: resData.fallback_player }, epOrd) : null);
-            return;
+      // Optional Local Dev fallback if Worker didn't yield streams on localhost
+      if (!streams && USE_LOCAL_API) {
+        try {
+          const r = await fetch(
+            `/api/stream?anime_id=${a.id}&episode=${epOrd}&translation=${encodeURIComponent(chosenVo?.name || voName)}`,
+            { signal: currentSignal }
+          );
+          if (r.ok) {
+            const resData = await r.json();
+            if (resData?.streams && Object.keys(resData.streams).length > 0) {
+              streams = resData.streams;
+            }
           }
+        } catch (_) {}
+      }
 
-          if (resData.active_translation) {
-            state.currentPlayerState.voiceoverName = resData.active_translation;
-          }
-          if (resData.translations && resData.translations.length > 0) {
-            updateDynamicTranslationsDropdown(resData.translations, resData.active_translation);
-          }
+      if (currentSignal.aborted || myPlaybackToken !== state.currentPlaybackToken) return;
 
-          mountNativeHlsPlayer(streamUrl, () => mountCleanKodikIframe(findChosenVoiceover()));
+      if (streams && Object.keys(streams).length > 0) {
+        const picked = pickStreamByPreference(streams, q);
+        if (picked) {
+          syncQualityDropdownForStreams(streams, picked.quality);
+          state.currentPlayerState.quality = picked.quality;
+          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(chosenVo));
           if (statusText) {
-            statusText.textContent = `LumaPlayer • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+            statusText.textContent = `LumaPlayer ${picked.quality}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${chosenVo?.name || state.currentPlayerState.voiceoverName}`;
           }
-        })
-        .catch((err) => {
-          if (err && err.name === "AbortError") return;
-          if (myPlaybackToken !== state.currentPlaybackToken) return;
-          mountCleanKodikIframe(findChosenVoiceover());
-        });
+          prefetchNextEpisodeStream(detail, chosenVo, epOrd);
+          return;
+        }
+      }
+
+      // Final clean fallback ONLY if direct extraction failed
+      mountCleanKodikIframe(chosenVo);
     }
 
     // Auto-play immediately if switched from list/button

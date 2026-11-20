@@ -403,6 +403,8 @@ button {
   gap: 7px;
   height: 40px;
   padding: 0 13px;
+  flex-shrink: 0;
+  white-space: nowrap;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -421,6 +423,7 @@ button {
 .btn-icon-only {
   width: 40px;
   height: 40px;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1891,13 +1894,15 @@ button {
   z-index: 1;
   display: grid;
   grid-template-columns: 1fr 350px;
-  min-height: 540px;
+  align-items: stretch;
+  min-height: 490px;
 }
 
 .video-viewport {
   position: relative;
   background: #06060a;
   width: 100%;
+  height: 100%;
   aspect-ratio: 16 / 9;
   display: flex;
   align-items: center;
@@ -2997,6 +3002,41 @@ button {
 /* ==========================================================================
    Responsive Breakpoints & Native Mobile Experience
    ========================================================================== */
+@media (max-width: 1360px) {
+  .header-inner {
+    gap: 12px;
+  }
+  .header-left {
+    gap: 12px;
+  }
+  .nav-link {
+    padding: 7px 9px;
+    font-size: 0.84rem;
+    gap: 5px;
+  }
+  .search-wrapper {
+    flex: 1 1 180px;
+    min-width: 150px;
+  }
+  .search-input {
+    height: 38px;
+    padding: 0 32px 0 34px;
+    font-size: 0.88rem;
+  }
+  .search-shortcut, .search-Shortcut {
+    display: none;
+  }
+  .btn-icon-action {
+    height: 38px;
+    padding: 0 10px;
+    font-size: 0.82rem;
+  }
+  .btn-icon-only {
+    width: 38px;
+    height: 38px;
+  }
+}
+
 @media (max-width: 1100px) {
   .anime-banners-track {
     grid-template-columns: 1fr;
