@@ -1656,8 +1656,13 @@ button {
   height: 100%;
   object-fit: cover;
   object-position: center 25%;
-  opacity: 0.45;
-  filter: blur(2px);
+  opacity: 0.48;
+  filter: blur(1px);
+}
+
+.detail-banner-img.fallback-poster {
+  filter: blur(18px) brightness(0.55);
+  transform: scale(1.12);
 }
 
 .detail-banner-gradient {
@@ -1800,6 +1805,8 @@ button {
 }
 
 .cinema-toolbar {
+  position: relative;
+  z-index: 30;
   padding: 16px 20px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border-subtle);
@@ -1877,6 +1884,8 @@ button {
 }
 
 .cinema-stage-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: 1fr 350px;
   min-height: 540px;
@@ -2565,6 +2574,38 @@ button {
   color: var(--text-secondary);
 }
 
+.cinema-footer-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-ep-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.btn-ep-nav:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.btn-ep-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Characters & Screenshots */
 .characters-rail {
   display: grid;
@@ -3043,10 +3084,6 @@ button {
 
   .search-shortcut, .search-Shortcut {
     display: none;
-  }
-
-  #phoneConnectBtn {
-    display: none !important;
   }
 
   .btn-icon-action {

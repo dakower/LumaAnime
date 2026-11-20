@@ -17,6 +17,10 @@
     window.location.hostname.includes("vercel.app") ||
     window.location.hostname.includes("netlify.app");
 
+  const USE_LOCAL_API =
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") &&
+    !IS_STATIC_HOST;
+
   async function fastFetchJson(url, timeoutMs = 2800) {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -214,7 +218,6 @@
   // 2. Application State & LocalStorage Persistence
   // =========================================================================
   const state = {
-    detailCache: {},
     currentView: "home",
     homeData: null,
     heroItems: [],
@@ -250,6 +253,7 @@
       mode: "hls", // 'hls' | 'balancer' | 'trailer'
       voiceoverId: "anilibria_hls",
       voiceoverName: "AniLibria.TV (Прямой поток 1080p FHD)",
+      voiceoverLink: "",
       voiceoverBadge: "FHD 1080p",
       episodeOrdinal: 1,
       quality: "1080",
@@ -288,18 +292,19 @@
     state.watchProgress = loadJsonStorage(`luma_watch_progress_${uid}`, loadJsonStorage("luma_watch_progress_backup", {}));
     updateLibraryBadge();
 
-    // Also pull latest server-stored watch progress
-    fetch(`/api/watch-progress?user_id=${encodeURIComponent(uid)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data && typeof data === "object") {
-          const serverWp = data.progress || data;
-          if (serverWp && typeof serverWp === "object" && !Array.isArray(serverWp)) {
-            state.watchProgress = Object.assign({}, serverWp, state.watchProgress);
+    if (USE_LOCAL_API) {
+      fetch(`/api/watch-progress?user_id=${encodeURIComponent(uid)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && typeof data === "object") {
+            const serverWp = data.progress || data;
+            if (serverWp && typeof serverWp === "object" && !Array.isArray(serverWp)) {
+              state.watchProgress = Object.assign({}, serverWp, state.watchProgress);
+            }
           }
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    }
   }
 
   function saveLibrary() {
@@ -309,15 +314,16 @@
       localStorage.setItem("luma_user_library_v1", JSON.stringify(state.library));
       updateLibraryBadge();
 
-      // Persist to local server
-      fetch("/api/collections", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: state.lumaUser?.user_id || "guest",
-          collections: state.library
-        })
-      }).catch(() => {});
+      if (USE_LOCAL_API) {
+        fetch("/api/collections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: state.lumaUser?.user_id || "guest",
+            collections: state.library
+          })
+        }).catch(() => {});
+      }
     } catch (_) {}
   }
 
@@ -346,18 +352,19 @@
       localStorage.setItem(key, JSON.stringify(state.watchProgress));
       localStorage.setItem("luma_watch_progress_backup", JSON.stringify(state.watchProgress));
 
-      // Debounced sync to server
-      clearTimeout(window.__syncWpTimer);
-      window.__syncWpTimer = setTimeout(() => {
-        fetch("/api/watch-progress", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: state.lumaUser?.user_id || "guest",
-            progress: state.watchProgress
-          })
-        }).catch(() => {});
-      }, 1000);
+      if (USE_LOCAL_API) {
+        clearTimeout(window.__syncWpTimer);
+        window.__syncWpTimer = setTimeout(() => {
+          fetch("/api/watch-progress", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: state.lumaUser?.user_id || "guest",
+              progress: state.watchProgress
+            })
+          }).catch(() => {});
+        }, 1000);
+      }
     } catch (_) {}
   }
 
@@ -522,9 +529,12 @@
   }
 
   function getPoster(anime) {
+    if (anime.hd_cover_url) return anime.hd_cover_url;
     if (anime.poster_url) return anime.poster_url;
     if (anime.image && anime.image.original && !anime.image.original.includes("missing")) {
-      return `https://shikimori.io${anime.image.original}`;
+      return anime.image.original.startsWith("http")
+        ? anime.image.original
+        : `https://shikimori.io${anime.image.original}`;
     }
     return "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg";
   }
@@ -656,7 +666,7 @@
       // 1. Instant 0ms Render from Cache or Starter Bundle
       let cached = null;
       try {
-        const raw = localStorage.getItem("luma_home_cache_v4");
+        const raw = localStorage.getItem("luma_home_cache_v5");
         if (raw) cached = JSON.parse(raw);
       } catch (_) {}
 
@@ -683,8 +693,21 @@
     state.homeData = data;
 
     const candidates = [...(data.ongoing_top || []), ...(data.popular_all_time || [])];
-    const withBanners = candidates.filter((a) => a.banner_url && a.banner_url !== a.poster_url);
-    state.heroItems = (withBanners.length >= 4 ? withBanners : candidates).slice(0, 6);
+    const seenWidescreen = new Set();
+    const widescreenCandidates = [];
+    const addWidescreen = (a) => {
+      if (!a || !a.id || seenWidescreen.has(Number(a.id))) return;
+      if (a.banner_url && a.banner_url !== a.poster_url) {
+        seenWidescreen.add(Number(a.id));
+        widescreenCandidates.push(a);
+      }
+    };
+    candidates.forEach(addWidescreen);
+    if (widescreenCandidates.length < 4) {
+      DEFAULT_STARTER_HOME.forEach(addWidescreen);
+    }
+
+    state.heroItems = (widescreenCandidates.length ? widescreenCandidates : DEFAULT_STARTER_HOME).slice(0, 6);
     renderHeroSpotlight(0);
     startHeroRotation();
 
@@ -701,11 +724,16 @@
         state.animeBannerList.push(a);
       }
     });
+    state.animeBannerList.sort((a, b) => {
+      const hasA = a.banner_url && a.banner_url !== a.poster_url ? 1 : 0;
+      const hasB = b.banner_url && b.banner_url !== b.poster_url ? 1 : 0;
+      return hasB - hasA;
+    });
 
     renderAnimeBanners(0);
     startAnimeBannerRotation();
 
-    state.wideShowcaseList = state.animeBannerList.slice(0, 6);
+    state.wideShowcaseList = (widescreenCandidates.length ? widescreenCandidates : state.animeBannerList).slice(0, 6);
     renderWideShowcaseBanner(0);
     startWideShowcaseRotation();
 
@@ -718,7 +746,7 @@
 
   async function enrichAnimeWithAniListBanners(items) {
     if (!Array.isArray(items) || !items.length) return;
-    const needBanners = items.filter((a) => a && a.id && (!a.banner_url || a.banner_url === a.poster_url));
+    const needBanners = items.filter((a) => a && a.id && (!a.banner_url || a.banner_url === a.poster_url || !a.hd_cover_url));
     if (!needBanners.length) return;
     const ids = Array.from(new Set(needBanners.map((a) => Number(a.id)).filter((id) => id > 0))).slice(0, 50);
     if (!ids.length) return;
@@ -729,6 +757,9 @@
           media(idMal_in: $ids, type: ANIME) {
             idMal
             bannerImage
+            coverImage {
+              extraLarge
+            }
           }
         }
       }`;
@@ -740,16 +771,19 @@
       if (res.ok) {
         const json = await res.json();
         const mediaList = json?.data?.Page?.media || [];
-        const bannerMap = new Map();
+        const mediaMap = new Map();
         mediaList.forEach((m) => {
-          if (m.idMal && m.bannerImage) {
-            bannerMap.set(Number(m.idMal), m.bannerImage);
+          if (m.idMal) {
+            mediaMap.set(Number(m.idMal), m);
           }
         });
         items.forEach((a) => {
           if (a && a.id) {
-            const b = bannerMap.get(Number(a.id));
-            if (b) a.banner_url = b;
+            const m = mediaMap.get(Number(a.id));
+            if (m) {
+              if (m.bannerImage) a.banner_url = m.bannerImage;
+              if (m.coverImage?.extraLarge) a.hd_cover_url = m.coverImage.extraLarge;
+            }
           }
         });
       }
@@ -758,8 +792,7 @@
 
   async function fetchFreshHomeData(forceRefresh = false) {
     let data = null;
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal && !IS_STATIC_HOST) {
+    if (USE_LOCAL_API) {
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 2000);
@@ -772,29 +805,27 @@
     if (!data || !data.ongoing_top || data.ongoing_top.length === 0) {
       try {
         const [ongoing, popular, topRated, alData] = await Promise.all([
-          fastFetchJson("https://shikimori.io/api/animes?order=popularity&limit=16&status=ongoing", 2800),
-          fastFetchJson("https://shikimori.io/api/animes?order=popularity&limit=16", 2800),
-          fastFetchJson("https://shikimori.io/api/animes?order=ranked&limit=16", 2800),
-          fastFetchJson("https://anilibria.top/api/v1/anime/schedule/now", 2800)
+          fastFetchJson("https://shikimori.io/api/animes?censored=true&order=popularity&limit=16&status=ongoing", 3200),
+          fastFetchJson("https://shikimori.io/api/animes?censored=true&order=popularity&limit=16", 3200),
+          fastFetchJson("https://shikimori.io/api/animes?censored=true&order=ranked&limit=16", 3200),
+          fastFetchJson("https://anilibria.top/api/v1/anime/releases/latest?limit=8", 3200)
         ]);
 
         let freshAniLibria = [];
-        if (alData && typeof alData === "object") {
-          const list = Array.isArray(alData) ? alData : (alData.today || Object.values(alData)[0] || []);
-          if (Array.isArray(list)) {
-            freshAniLibria = list.slice(0, 8).map((rel) => {
-              const r = rel.release || rel;
-              return {
-                id: r.shikimori?.id || r.id,
-                name: r.name?.english || r.name?.main || "",
-                russian: r.name?.main || "",
-                score: "8.5",
-                kind: "tv",
-                episodes: r.episodes_total || 12,
-                image: { original: r.poster?.src ? `https://anilibria.top${r.poster.src}` : "" },
-              };
-            });
-          }
+        if (Array.isArray(alData)) {
+          freshAniLibria = alData.slice(0, 8).map((r) => {
+            const posterSrc = r.poster?.optimized?.src || r.poster?.src || "";
+            return {
+              shikimori_id: r.shikimori?.id || r.mal?.id || "",
+              id: r.shikimori?.id || r.mal?.id || r.id,
+              name: r.name?.english || r.name?.main || "",
+              russian: r.name?.main || "",
+              genres: (r.genres || []).map((g) => g.name).filter(Boolean),
+              episodes_total: r.episodes_total || "",
+              type: r.type?.description || "ТВ",
+              poster_url: posterSrc ? (posterSrc.startsWith("http") ? posterSrc : `https://anilibria.top${posterSrc}`) : "",
+            };
+          });
         }
 
         if (Array.isArray(ongoing) && ongoing.length > 0) {
@@ -819,7 +850,7 @@
       await enrichAnimeWithAniListBanners(allToEnrich);
       applyHomeData(data);
       try {
-        localStorage.setItem("luma_home_cache_v4", JSON.stringify(data));
+        localStorage.setItem("luma_home_cache_v5", JSON.stringify(data));
       } catch (_) {}
     }
   }
@@ -1053,8 +1084,7 @@
     const grid = document.getElementById("homeGenreRecGrid");
     renderSkeletonGrid(grid, 6);
     let items = null;
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal) {
+    if (USE_LOCAL_API) {
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 3500);
@@ -1067,11 +1097,7 @@
       } catch (_) {}
     }
     if (!items || !items.length) {
-      try {
-        const res = await fetch(`https://shikimori.io/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`)
-          .catch(() => fetch(`https://shikimori.io/api/animes?genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`));
-        if (res && res.ok) items = await res.json();
-      } catch (_) {}
+      items = await fastFetchJson(`https://shikimori.io/api/animes?censored=true&genre=${encodeURIComponent(genreId)}&order=ranked&limit=12`, 3200);
     }
     renderAnimeGrid(grid, (items || []).slice(0, 12));
   }
@@ -1323,8 +1349,7 @@
     }
 
     let items = null;
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal && !IS_STATIC_HOST) {
+    if (USE_LOCAL_API) {
       try {
         const ctrl = new AbortController();
         const tid = setTimeout(() => ctrl.abort(), 2000);
@@ -1343,9 +1368,11 @@
       if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
       if (state.catalog.kind) targetUrl += `&kind=${state.catalog.kind}`;
       if (state.catalog.status) targetUrl += `&status=${state.catalog.status}`;
+      if (state.catalog.season) targetUrl += `&season=${encodeURIComponent(state.catalog.season)}`;
+      if (state.catalog.score) targetUrl += `&score=${encodeURIComponent(state.catalog.score)}`;
       if (state.catalog.selectedGenres.size > 0) targetUrl += `&genre=${Array.from(state.catalog.selectedGenres).join(",")}`;
 
-      items = await fastFetchJson(targetUrl, 2600);
+      items = await fastFetchJson(targetUrl, 3000);
       if (Array.isArray(items) && state.catalog.search) {
         items = rerankSearchResultsClient(items, state.catalog.search).slice(0, 24);
       }
@@ -1431,32 +1458,60 @@
       tagsEl.innerHTML = `<span class="meta-tag-pill">Добавляйте аниме в коллекцию для калибровки</span>`;
     }
 
-    try {
-      const res = await fetch(`/api/recommendations?genre=${encodeURIComponent(targetGenreIds)}&order=ranked&limit=12`);
-      const data = await res.json();
-      renderAnimeGrid(grid, (data.items || []).slice(0, 12));
-    } catch (_) {}
+    let items = null;
+    if (USE_LOCAL_API) {
+      try {
+        const res = await fetch(`/api/recommendations?genre=${encodeURIComponent(targetGenreIds)}&order=ranked&limit=12`);
+        if (res.ok) {
+          const data = await res.json();
+          items = data.items || [];
+        }
+      } catch (_) {}
+    }
+    if (!items || !items.length) {
+      items = await fastFetchJson(`https://shikimori.io/api/animes?censored=true&genre=${encodeURIComponent(targetGenreIds)}&order=ranked&limit=12`, 3200);
+    }
+    renderAnimeGrid(grid, (items || []).slice(0, 12));
   }
 
   async function loadMoodRecommendations(moodObj) {
     const grid = document.getElementById("moodRecResultsGrid");
     renderSkeletonGrid(grid, 6);
     const params = new URLSearchParams({ ...moodObj.params, limit: "12" });
-    try {
-      const res = await fetch(`/api/recommendations?${params.toString()}`);
-      const data = await res.json();
-      renderAnimeGrid(grid, (data.items || []).slice(0, 12));
-    } catch (_) {}
+    let items = null;
+    if (USE_LOCAL_API) {
+      try {
+        const res = await fetch(`/api/recommendations?${params.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          items = data.items || [];
+        }
+      } catch (_) {}
+    }
+    if (!items || !items.length) {
+      params.set("censored", "true");
+      items = await fastFetchJson(`https://shikimori.io/api/animes?${params.toString()}`, 3200);
+    }
+    renderAnimeGrid(grid, (items || []).slice(0, 12));
   }
 
   async function loadRecGenreExplorer(genreId) {
     const grid = document.getElementById("recGenreExplorerGrid");
     renderSkeletonGrid(grid, 12);
-    try {
-      const res = await fetch(`/api/recommendations?genre=${encodeURIComponent(genreId)}&order=popularity&limit=12`);
-      const data = await res.json();
-      renderAnimeGrid(grid, (data.items || []).slice(0, 12));
-    } catch (_) {}
+    let items = null;
+    if (USE_LOCAL_API) {
+      try {
+        const res = await fetch(`/api/recommendations?genre=${encodeURIComponent(genreId)}&order=popularity&limit=12`);
+        if (res.ok) {
+          const data = await res.json();
+          items = data.items || [];
+        }
+      } catch (_) {}
+    }
+    if (!items || !items.length) {
+      items = await fastFetchJson(`https://shikimori.io/api/animes?censored=true&genre=${encodeURIComponent(genreId)}&order=popularity&limit=12`, 3200);
+    }
+    renderAnimeGrid(grid, (items || []).slice(0, 12));
   }
 
   // =========================================================================
@@ -1469,23 +1524,18 @@
     let calendarItems = state.homeData?.calendar || [];
     if (!calendarItems.length) {
       container.innerHTML = `<div style="color:var(--text-secondary)">Загрузка календаря релизов...</div>`;
-      try {
-        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        if (isLocal) {
+      if (USE_LOCAL_API) {
+        try {
           const res = await fetch("/api/home");
           if (res.ok) {
             const data = await res.json();
             calendarItems = data.calendar || [];
           }
-        }
-      } catch (_) {}
-      if (!calendarItems.length) {
-        try {
-          const cRes = await fetch("https://shikimori.io/api/calendar").catch(() => fetch("https://shikimori.io/api/calendar"));
-          if (cRes && cRes.ok) {
-            calendarItems = await cRes.json();
-          }
         } catch (_) {}
+      }
+      if (!calendarItems.length) {
+        const calData = await fastFetchJson("https://shikimori.io/api/calendar", 3500);
+        if (Array.isArray(calData)) calendarItems = calData;
       }
     }
 
@@ -1579,83 +1629,153 @@
   // 10. Anime Detail Page & LumaPlayer (Full Uncut Episodes + Live Sync + Working Voiceover Switcher)
   // =========================================================================
 
-  async function fetchAniListBanner(animeId) {
+  async function fetchAniListDetailMeta(animeId) {
     try {
       const res = await fetch("https://graphql.anilist.co", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          query: `query ($id: Int) { Media(idMal: $id, type: ANIME) { bannerImage } }`,
+          query: `query ($id: Int) {
+            Media(idMal: $id, type: ANIME) {
+              bannerImage
+              coverImage { extraLarge }
+              nextAiringEpisode { episode airingAt }
+            }
+          }`,
           variables: { id: Number(animeId) }
         })
       });
       if (res.ok) {
         const json = await res.json();
-        return json?.data?.Media?.bannerImage || null;
+        return json?.data?.Media || null;
       }
     } catch (_) {}
     return null;
   }
 
-  async function fetchAniLibriaReleases(qName, animeId) {
+  async function fetchAniLibriaReleases(ruName, enName, animeId) {
     try {
-      const alSearch = await fastFetchJson(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(qName)}`, 1600);
-      if (!Array.isArray(alSearch) || !alSearch.length) return null;
-      const cleanQ = (qName || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
-      const match = alSearch.find((x) => {
-        if (String(x.shikimori?.id) === String(animeId) || String(x.mal?.id) === String(animeId)) return true;
-        const ru = (x.name?.main || x.names?.ru || "").toLowerCase().replace(/[^a-zа-я0-9]/g, "");
-        return ru.length > 2 && (ru === cleanQ || cleanQ.includes(ru) || ru.includes(cleanQ));
-      });
+      const queries = Array.from(new Set([ruName, enName].map((s) => (s || "").trim()).filter(Boolean)));
+      if (!queries.length) return null;
+
+      const searchResults = await Promise.all(
+        queries.map((q) =>
+          fastFetchJson(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`, 2000)
+        )
+      );
+
+      let match = null;
+      for (const arr of searchResults) {
+        if (!Array.isArray(arr)) continue;
+        // STRICT exact ID match only — prevents unrelated anime substitutions
+        match = arr.find(
+          (x) => String(x.shikimori?.id) === String(animeId) || String(x.mal?.id) === String(animeId)
+        );
+        if (match) break;
+      }
+
       if (!match || !match.id) return null;
-      const rel = await fastFetchJson(`https://anilibria.top/api/v1/anime/releases/${match.id}`, 1600);
-      if (!rel || !Array.isArray(rel.episodes)) return null;
+      const rel = await fastFetchJson(`https://anilibria.top/api/v1/anime/releases/${match.id}`, 2000);
+      if (!rel || !Array.isArray(rel.episodes) || !rel.episodes.length) return null;
+
+      const episodes = rel.episodes.map((ep) => ({
+        ordinal: Number(ep.ordinal),
+        name: ep.name || `Серия ${ep.ordinal}`,
+        duration: ep.duration,
+        hls_1080: ep.hls_1080,
+        hls_720: ep.hls_720,
+        hls_480: ep.hls_480,
+        opening: ep.opening,
+        ending: ep.ending,
+        preview: ep.preview?.src
+          ? ep.preview.src.startsWith("http")
+            ? ep.preview.src
+            : `https://anilibria.top${ep.preview.src}`
+          : null,
+      }));
+      const ords = episodes.map((e) => e.ordinal).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+
       return {
         release_id: match.id,
-        episodes: rel.episodes.map(ep => ({
-          ordinal: ep.ordinal,
-          name: ep.name || `Серия ${ep.ordinal}`,
-          duration: ep.duration,
-          hls_1080: ep.hls_1080,
-          hls_720: ep.hls_720,
-          hls_480: ep.hls_480,
-          opening: ep.opening,
-          ending: ep.ending,
-          preview: ep.preview?.src ? `https://anilibria.top${ep.preview.src}` : null
-        }))
+        ep_min: ords.length ? ords[0] : 1,
+        ep_max: ords.length ? ords[ords.length - 1] : episodes.length,
+        episodes,
       };
     } catch (_) {
       return null;
     }
   }
 
+  function buildKodikEpisodesMap(seasonsObj) {
+    if (!seasonsObj || typeof seasonsObj !== "object") return null;
+    const rawKeys = Object.keys(seasonsObj);
+    if (!rawKeys.length) return null;
+    const nonZero = rawKeys.filter((k) => k !== "0");
+    const targetKeys = (nonZero.length ? nonZero : rawKeys).sort((a, b) => Number(a) - Number(b));
+
+    const map = {};
+    for (const sk of targetKeys) {
+      const eps = seasonsObj[sk]?.episodes;
+      if (!eps || typeof eps !== "object") continue;
+      for (const [epKey, rawEpLink] of Object.entries(eps)) {
+        const epNum = Number(epKey);
+        if (!Number.isFinite(epNum) || epNum <= 0 || !rawEpLink) continue;
+        if (!map[epNum]) {
+          map[epNum] = rawEpLink.startsWith("//") ? `https:${rawEpLink}` : rawEpLink;
+        }
+      }
+    }
+    const keys = Object.keys(map).map(Number).sort((a, b) => a - b);
+    if (!keys.length) return null;
+    return { map, min: keys[0], max: keys[keys.length - 1], count: keys.length };
+  }
+
   async function fetchClientSideAnimeDetail(animeId) {
     try {
-      // 1. Fetch main Shikimori info (fast, ~0.25s)
+      // 1. Fetch main Shikimori info
       const shikiResp = await fetch(`https://shikimori.io/api/animes/${animeId}`)
         .catch(() => fetch(`https://shikimori.io/api/animes/${animeId}`));
       if (!shikiResp || !shikiResp.ok) return null;
       const details = await shikiResp.json();
       if (!details || !details.id) return null;
 
-      const qName = details.russian || details.name;
+      const ruName = details.russian || details.name || "";
+      const enName = details.name || "";
       const kodikToken = "a0457eb45312af80bbb9f3fb33de3e93";
 
-      // 2. Fetch all secondary enrichments concurrently in parallel!
-      const [bannerRes, frRes, kodikRes, alRes, relRes, simRes] = await Promise.allSettled([
-        fetchAniListBanner(animeId),
-        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/franchise`, 1800),
-        fastFetchJson(`https://kodik-api.com/search?token=${kodikToken}&shikimori_id=${animeId}&with_episodes=true`, 1800),
-        fetchAniLibriaReleases(qName, animeId),
-        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/related`, 1800),
-        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/similar`, 1800),
+      // Prepare cleaned official trailers
+      details.videos_clean = (details.videos || [])
+        .filter((v) => v && v.player_url)
+        .map((v) => ({
+          name: v.name || "Трейлер",
+          player_url: v.player_url.replace(/^http:\/\//i, "https://"),
+        }));
+
+      // 2. Fetch all secondary enrichments concurrently in parallel
+      const [metaRes, frRes, kodikRes, alRes, relRes, simRes] = await Promise.allSettled([
+        fetchAniListDetailMeta(animeId),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/franchise`, 2200),
+        fastFetchJson(`https://kodik-api.com/search?token=${kodikToken}&shikimori_id=${animeId}&with_episodes=true`, 2400),
+        fetchAniLibriaReleases(ruName, enName, animeId),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/related`, 2200),
+        fastFetchJson(`https://shikimori.io/api/animes/${animeId}/similar`, 2200),
       ]);
 
-      if (bannerRes.status === "fulfilled" && bannerRes.value) {
-        details.banner_url = bannerRes.value;
+      if (metaRes.status === "fulfilled" && metaRes.value) {
+        const meta = metaRes.value;
+        if (meta.bannerImage) {
+          details.banner_url = meta.bannerImage;
+          details.has_widescreen_banner = true;
+        }
+        if (meta.coverImage?.extraLarge) {
+          details.hd_cover_url = meta.coverImage.extraLarge;
+        }
+        if (!details.next_episode_at && meta.nextAiringEpisode) {
+          details.next_airing = meta.nextAiringEpisode;
+        }
       }
 
-      // Franchise
+      // Franchise seasons
       let seasons = [];
       if (frRes.status === "fulfilled" && frRes.value && Array.isArray(frRes.value.nodes)) {
         const tvNodes = frRes.value.nodes.filter((n) => {
@@ -1678,72 +1798,140 @@
       }
 
       const anilibriaData = alRes.status === "fulfilled" ? alRes.value : null;
+      const kodikSearchData = kodikRes.status === "fulfilled" ? kodikRes.value : null;
 
-      // Episodes calculation
+      // Parse Kodik results with exact per-episode links & deduplication
       const isMovie = (details.kind || "").toLowerCase() === "movie" || (details.kind || "").toLowerCase() === "фильм";
       const isAnons = (details.status || "").toLowerCase() === "anons";
-      let totalEp = 1;
-      if (isMovie) {
-        totalEp = isAnons ? 0 : 1;
-      } else if (isAnons && !details.episodes_aired) {
-        totalEp = 0;
-      } else if (details.episodes_aired && details.episodes_aired > 0) {
-        totalEp = details.episodes_aired;
-      } else if (details.episodes && details.episodes > 0) {
-        totalEp = details.episodes;
-      } else if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0) {
-        totalEp = anilibriaData.episodes.length;
-      } else {
-        totalEp = 1;
-      }
-      totalEp = Math.min(Math.max(totalEp, 0), 3000);
 
-      // Assemble all voiceovers with real direct links!
-      const voiceovers = [];
-      if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0) {
-        voiceovers.push({
-          id: "anilibria_hls",
-          name: "AniLibria.TV (Прямой поток 1080p FHD)",
-          link: null,
-          type: "hls",
-          ep_min: 1,
-          ep_max: anilibriaData.episodes.length,
-          badge: `Все ${anilibriaData.episodes.length} эп. • FHD 1080p`,
-          available: true
-        });
-      }
+      const kodikByTitle = new Map();
+      let maxKodikEp = 0;
 
-      const kodikSearchData = kodikRes.status === "fulfilled" ? kodikRes.value : null;
-      if (kodikSearchData && Array.isArray(kodikSearchData.results) && kodikSearchData.results.length > 0) {
-        const seenTitles = new Set();
+      if (kodikSearchData && Array.isArray(kodikSearchData.results)) {
         kodikSearchData.results.forEach((r) => {
           const t = r.translation || {};
           const title = (t.title || "").trim();
-          if (!title || seenTitles.has(title.toLowerCase())) return;
-          seenTitles.add(title.toLowerCase());
+          if (!title) return;
 
-          // Avoid duplicating AniLibria if already present as direct HLS
-          if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0 && /anilibria/i.test(title)) {
+          const normTitle = title.toLowerCase();
+          const hasAlHls = Boolean(anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0);
+          if (hasAlHls && (/anilibria/i.test(title) || (/aniliberty/i.test(title) && (r.episodes_count || 0) <= anilibriaData.episodes.length))) {
             return;
           }
 
           const rawLink = r.link || "";
           const cleanLink = rawLink.startsWith("//") ? `https:${rawLink}` : rawLink;
           const isSub = (t.type || "").toLowerCase().includes("sub") || /субтитр|sub/i.test(title);
-          const epCount = r.episodes_count || totalEp;
+          const parsedEps = buildKodikEpisodesMap(r.seasons);
 
-          voiceovers.push({
-            id: `dub_${t.id || title.toLowerCase().replace(/[^a-zа-я0-9]/g, "_")}`,
+          let episodesMap = parsedEps ? { ...parsedEps.map } : null;
+          let epMin = parsedEps ? parsedEps.min : 1;
+          let epMax = parsedEps ? parsedEps.max : (isMovie ? 1 : (r.episodes_count || details.episodes_aired || details.episodes || 1));
+
+          if (!episodesMap && (isMovie || r.type === "anime")) {
+            episodesMap = { 1: cleanLink };
+            epMin = 1;
+            epMax = 1;
+          }
+
+          if (epMax > maxKodikEp) maxKodikEp = epMax;
+
+          const existing = kodikByTitle.get(normTitle);
+          if (existing) {
+            if (episodesMap) {
+              existing.episodesMap = Object.assign({}, existing.episodesMap || {}, episodesMap);
+              const allNums = Object.keys(existing.episodesMap).map(Number).sort((a, b) => a - b);
+              if (allNums.length) {
+                existing.ep_min = allNums[0];
+                existing.ep_max = allNums[allNums.length - 1];
+              }
+            }
+            if ((r.episodes_count || 0) > (existing.rawCount || 0) && cleanLink) {
+              existing.link = cleanLink;
+              existing.rawCount = r.episodes_count || 0;
+            }
+            return;
+          }
+
+          kodikByTitle.set(normTitle, {
+            id: `dub_${t.id || normTitle.replace(/[^a-zа-я0-9]/g, "_")}`,
             name: title,
             link: cleanLink,
             type: isSub ? "Sub" : "Studio",
-            ep_min: 1,
-            ep_max: epCount,
-            badge: epCount > 1 ? `1–${epCount} эп.` : "Полная озвучка",
+            isSub,
+            isMovieLink: Boolean(isMovie || r.type === "anime"),
+            episodesMap,
+            ep_min: epMin,
+            ep_max: epMax,
+            rawCount: parsedEps ? parsedEps.count : (r.episodes_count || epMax),
             available: true
           });
         });
       }
+
+      // Compute final badge & sort Kodik dubs by completeness + Ep1 availability + studio priority
+      const PRIORITY_STUDIOS = [
+        "дублированный", "дубляж", "studio band", "anilibria", "aniliberty", "anidub",
+        "animedia", "dream cast", "2x2", "animevost", "shiza", "kansai",
+        "persona99", "flarrow films", "anistar", "jam club", "onwave", "shachiburi", "le-production"
+      ];
+      const studioRank = (titleLower) => {
+        const idx = PRIORITY_STUDIOS.findIndex((p) => titleLower.includes(p));
+        return idx === -1 ? 999 : idx;
+      };
+
+      const kodikVoiceovers = Array.from(kodikByTitle.values()).map((v) => {
+        const badge = isMovie || v.isMovieLink
+          ? (v.isSub ? "Субтитры" : "Полный фильм")
+          : v.ep_min === v.ep_max
+          ? `${v.ep_min} эп.`
+          : `${v.ep_min}–${v.ep_max} эп.`;
+        return { ...v, badge };
+      });
+
+      kodikVoiceovers.sort((a, b) => {
+        if (a.isSub !== b.isSub) return a.isSub ? 1 : -1;
+        const aHasEp1 = a.episodesMap ? (a.episodesMap[1] ? 1 : 0) : (a.ep_min <= 1 ? 1 : 0);
+        const bHasEp1 = b.episodesMap ? (b.episodesMap[1] ? 1 : 0) : (b.ep_min <= 1 ? 1 : 0);
+        if (aHasEp1 !== bHasEp1) return bHasEp1 - aHasEp1;
+        const rankDiff = studioRank(a.name.toLowerCase()) - studioRank(b.name.toLowerCase());
+        if (rankDiff !== 0) return rankDiff;
+        return (b.ep_max - b.ep_min) - (a.ep_max - a.ep_min);
+      });
+
+      // Episodes total calculation
+      const maxAlEp = anilibriaData?.ep_max || 0;
+      const shikiCount = details.episodes_aired && details.episodes_aired > 0
+        ? details.episodes_aired
+        : (details.episodes && details.episodes > 0 ? details.episodes : 0);
+
+      let totalEp = 1;
+      if (isMovie) {
+        totalEp = isAnons && maxKodikEp === 0 && maxAlEp === 0 ? 0 : 1;
+      } else if (isAnons && maxKodikEp === 0 && maxAlEp === 0 && shikiCount === 0) {
+        totalEp = 0;
+      } else {
+        totalEp = Math.max(shikiCount, maxKodikEp, maxAlEp, 1);
+      }
+      totalEp = Math.min(Math.max(totalEp, 0), 3000);
+
+      // Assemble final voiceover list (AniLibria 1080p direct HLS first when available)
+      const voiceovers = [];
+      if (anilibriaData && anilibriaData.episodes && anilibriaData.episodes.length > 0) {
+        const alMin = anilibriaData.ep_min || 1;
+        const alMax = anilibriaData.ep_max || anilibriaData.episodes.length;
+        voiceovers.push({
+          id: "anilibria_hls",
+          name: "AniLibria.TV (Прямой поток 1080p FHD)",
+          link: null,
+          type: "hls",
+          ep_min: alMin,
+          ep_max: alMax,
+          badge: isMovie ? "1080p FHD" : `${alMin}–${alMax} эп. • FHD`,
+          available: true
+        });
+      }
+      voiceovers.push(...kodikVoiceovers);
 
       if (voiceovers.length === (anilibriaData ? 1 : 0)) {
         const shikiDubbers = details.fandubbers || [];
@@ -1768,7 +1956,8 @@
         );
       }
 
-      const defaultLink = voiceovers[0]?.link || `https://kodikplayer.com/find-player?shikimoriID=${animeId}`;
+      const defaultKodikVo = kodikVoiceovers[0] || voiceovers[0];
+      const defaultLink = defaultKodikVo?.link || `https://kodikplayer.com/find-player?shikimoriID=${animeId}`;
 
       const alMap = {};
       if (anilibriaData && anilibriaData.episodes) {
@@ -1778,12 +1967,14 @@
       }
 
       const fullEps = [];
-      const defaultPreview = details.banner_url || getPoster(details);
+      const defaultPreview = details.banner_url || details.hd_cover_url || getPoster(details);
       for (let i = 1; i <= totalEp; i++) {
         const alEp = alMap[i];
+        const kodikEpLink = defaultKodikVo?.episodesMap?.[i]
+          || (defaultLink.includes("?") ? `${defaultLink}&episode=${i}` : `${defaultLink}?episode=${i}`);
         fullEps.push({
           ordinal: i,
-          name: (alEp && alEp.name) ? alEp.name : `Серия ${i}`,
+          name: (alEp && alEp.name) ? alEp.name : (isMovie ? (ruName || "Полнометражный фильм") : `Серия ${i}`),
           has_hls: Boolean(alEp && (alEp.hls_1080 || alEp.hls_720 || alEp.hls_480)),
           hls_1080: alEp?.hls_1080 || null,
           hls_720: alEp?.hls_720 || null,
@@ -1791,7 +1982,7 @@
           opening: alEp?.opening || null,
           ending: alEp?.ending || null,
           preview: alEp?.preview || defaultPreview,
-          kodik_link: defaultLink ? (defaultLink.includes("?") ? `${defaultLink}&episode=${i}` : `${defaultLink}?episode=${i}`) : `https://kodikplayer.com/find-player?shikimoriID=${animeId}&episode=${i}`,
+          kodik_link: kodikEpLink,
           duration: (alEp && alEp.duration) || 1440,
         });
       }
@@ -1849,8 +2040,7 @@
     `;
 
     let data = null;
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (isLocal && !IS_STATIC_HOST) {
+    if (USE_LOCAL_API) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
@@ -1883,7 +2073,7 @@
             <button type="button" class="btn btn-primary" id="retryAnimeLoadBtn">
               Повторить попытку ↺
             </button>
-            <button type="button" class="btn btn-secondary" onclick="switchView('catalog')">
+            <button type="button" class="btn btn-secondary" data-nav="catalog">
               Вернуться в каталог
             </button>
           </div>
@@ -1909,7 +2099,7 @@
     const detail = data; // Ensures detail.seasons and all detail.* properties resolve cleanly
     const a = data.anime;
     const fullEpisodes = data.full_episodes || [];
-    const totalAvailable = data.total_available_episodes || fullEpisodes.length || 1;
+    const totalAvailable = data.total_available_episodes ?? fullEpisodes.length;
     const voiceovers = data.voiceovers || [];
     const similar = data.similar || [];
     const related = data.related || [];
@@ -1918,6 +2108,7 @@
     const titleRu = escapeHtml(a.russian || a.name);
     const titleOrig = escapeHtml(a.name);
     const poster = escapeHtml(getPoster(a));
+    const hasWidescreenBanner = Boolean(a.has_widescreen_banner || (a.banner_url && a.banner_url !== a.poster_url));
     const banner = escapeHtml(a.banner_url || poster);
     const score = a.score && parseFloat(a.score) > 0 ? `★ ${parseFloat(a.score).toFixed(2)}` : "Без оценки";
     const kind = KIND_LABELS[a.kind] || "ТВ-сериал";
@@ -1929,12 +2120,13 @@
     const currentLibStatus = state.library[a.id]?.status || "";
 
     const hasAnyHls = fullEpisodes.some((ep) => ep.has_hls);
-    const firstVo = voiceovers[0] || { id: "default", name: "Русская озвучка", badge: "Все серии" };
+    const firstVo = voiceovers[0] || { id: "default", name: "Русская озвучка", link: "", badge: "Все серии" };
 
     state.currentPlayerState = {
       mode: hasAnyHls ? "hls" : "balancer",
       voiceoverId: firstVo.id,
       voiceoverName: firstVo.name,
+      voiceoverLink: firstVo.link || "",
       voiceoverBadge: firstVo.badge,
       episodeOrdinal: 1,
       quality: "1080",
@@ -1997,7 +2189,7 @@
     const container = document.getElementById("animeDetailContainer");
     container.innerHTML = `
       <div class="detail-banner-wrap">
-        <img class="detail-banner-img" src="${banner}" alt="" />
+        <img class="detail-banner-img ${hasWidescreenBanner ? "" : "fallback-poster"}" src="${banner}" alt="" />
         <div class="detail-banner-gradient"></div>
       </div>
 
@@ -2016,10 +2208,10 @@
                 <option value="dropped" ${currentLibStatus === "dropped" ? "selected" : ""}>Брошено</option>
                 ${currentLibStatus ? `<option value="remove">Удалить из коллекции</option>` : ""}
               </select>
-              <a href="#cinemaPlayerBox" class="btn-primary" style="justify-content:center;">
+              <button type="button" id="detailPlayBtn" class="btn-primary" style="justify-content:center;">
                 <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>К плееру (${totalAvailable} эп.)</span>
-              </a>
+              </button>
             </div>
           </div>
 
@@ -2163,6 +2355,10 @@
 
           <div class="cinema-footer-bar">
             <span id="cinemaStatusText">Готово к воспроизведению в LumaPlayer</span>
+            <div class="cinema-footer-nav">
+              <button type="button" class="btn-ep-nav" id="cinemaFooterPrevBtn" disabled>← Пред. серия</button>
+              <button type="button" class="btn-ep-nav" id="cinemaFooterNextBtn">След. серия →</button>
+            </div>
           </div>
         </div>
 
@@ -2275,11 +2471,17 @@
     // Check saved watch progress and sync player state
     const prog = getWatchProgress(a.id);
     if (prog && prog.currentTime > 3) {
-      const pEp = prog.episodeOrdinal || 1;
+      const pEp = Math.min(Math.max(1, Number(prog.episodeOrdinal) || 1), Math.max(1, totalAvailable));
       const pVo = prog.voiceoverName || "Русская озвучка";
       state.currentPlayerState.episodeOrdinal = pEp;
+      state.currentPlayerState.voiceoverId = "";
       state.currentPlayerState.voiceoverName = pVo;
+      state.currentPlayerState.voiceoverLink = "";
       state.currentPlayerState.savedCurrentTime = prog.currentTime;
+      state.currentPlayerState.epRangeIndex = Math.floor((pEp - 1) / 100);
+      document.querySelectorAll("[data-ep-chunk]").forEach((b) => {
+        b.classList.toggle("active", Number(b.dataset.epChunk) === state.currentPlayerState.epRangeIndex);
+      });
     }
 
     // Upgrade selects on detail page to custom LumaDropdowns
@@ -2297,12 +2499,12 @@
     }
 
     const detailPlayBtn = document.getElementById("detailPlayBtn");
-    if (prog && prog.currentTime > 3) {
-      const pEp = prog.episodeOrdinal || 1;
-      const pVo = prog.voiceoverName || "Русская озвучка";
-      const pTime = formatTime(prog.currentTime);
+    if (detailPlayBtn) {
+      if (prog && prog.currentTime > 3) {
+        const pEp = Math.min(Math.max(1, Number(prog.episodeOrdinal) || 1), Math.max(1, totalAvailable));
+        const pVo = prog.voiceoverName || "Русская озвучка";
+        const pTime = formatTime(prog.currentTime);
 
-      if (detailPlayBtn) {
         detailPlayBtn.innerHTML = `
           <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           <span>Продолжить (${pEp}-я эп. • ${pTime})</span>
@@ -2310,10 +2512,17 @@
         detailPlayBtn.onclick = (e) => {
           e.preventDefault();
           state.currentPlayerState.episodeOrdinal = pEp;
+          state.currentPlayerState.voiceoverId = "";
           state.currentPlayerState.voiceoverName = pVo;
           state.currentPlayerState.savedCurrentTime = prog.currentTime;
           populateVoiceoverDropdown(pEp);
           renderEpisodesSidebarList();
+          renderPlayerViewport(true);
+          document.getElementById("cinemaPlayerBox")?.scrollIntoView({ behavior: "smooth" });
+        };
+      } else {
+        detailPlayBtn.onclick = (e) => {
+          e.preventDefault();
           renderPlayerViewport(true);
           document.getElementById("cinemaPlayerBox")?.scrollIntoView({ behavior: "smooth" });
         };
@@ -2344,7 +2553,7 @@
     }
 
     if (!visibleEpisodes.length) {
-      listEl.innerHTML = `<div style="padding:16px; color:var(--text-secondary); font-size:0.84rem; text-align:center;">Серия не найдена</div>`;
+      listEl.innerHTML = `<div style="padding:16px; color:var(--text-secondary); font-size:0.84rem; text-align:center;">${fullEpisodes.length === 0 ? "Серии ещё не вышли" : "Серия не найдена"}</div>`;
       return;
     }
 
@@ -2366,6 +2575,8 @@
         const nextOrd = Number(btn.dataset.epOrdinal) || 1;
         state.currentPlayerState.episodeOrdinal = nextOrd;
         state.currentPlayerState.savedCurrentTime = 0;
+        state.currentPlayerState.mode = "hls";
+        document.getElementById("cinemaTrailerToggleBtn")?.classList.remove("active");
         populateVoiceoverDropdown(nextOrd);
         renderEpisodesSidebarList();
         renderPlayerViewport(true);
@@ -2513,6 +2724,31 @@
       renderPlayerViewport(state.currentPlayerState.mode === "trailer");
     });
 
+    // Footer Prev / Next Episode Buttons (placed cleanly below player, never overlaid on video)
+    const switchEpFromFooter = (delta) => {
+      const total = state.currentAnimeDetail?.total_available_episodes || 1;
+      const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
+      const nextOrd = cur + delta;
+      if (nextOrd < 1 || nextOrd > total) return;
+      state.currentPlayerState.episodeOrdinal = nextOrd;
+      state.currentPlayerState.savedCurrentTime = 0;
+      state.currentPlayerState.mode = "hls";
+      document.getElementById("cinemaTrailerToggleBtn")?.classList.remove("active");
+      const targetChunk = Math.floor((nextOrd - 1) / 100);
+      if (targetChunk !== state.currentPlayerState.epRangeIndex) {
+        state.currentPlayerState.epRangeIndex = targetChunk;
+        document.querySelectorAll("[data-ep-chunk]").forEach((b) => {
+          b.classList.toggle("active", Number(b.dataset.epChunk) === targetChunk);
+        });
+      }
+      populateVoiceoverDropdown(nextOrd);
+      renderEpisodesSidebarList();
+      renderPlayerViewport(true);
+      showToast(`Включена ${nextOrd}-я серия • Озвучка: ${state.currentPlayerState.voiceoverName}`);
+    };
+    document.getElementById("cinemaFooterPrevBtn")?.addEventListener("click", () => switchEpFromFooter(-1));
+    document.getElementById("cinemaFooterNextBtn")?.addEventListener("click", () => switchEpFromFooter(1));
+
     // Voiceover Custom Select Change -> Preserves Current Time & Seamlessly Reloads Stream with Active Voiceover Badge!
     const voSelect = document.getElementById("voiceoverSelect");
     if (voSelect) {
@@ -2523,6 +2759,8 @@
         }
         const opt = voSelect.options[voSelect.selectedIndex];
         if (!opt) return;
+        state.currentPlayerState.mode = "hls";
+        document.getElementById("cinemaTrailerToggleBtn")?.classList.remove("active");
         state.currentPlayerState.voiceoverId = opt.dataset.id || opt.value;
         state.currentPlayerState.voiceoverName = opt.dataset.name || opt.textContent || "Русская озвучка";
         state.currentPlayerState.voiceoverLink = opt.dataset.link || "";
@@ -2567,39 +2805,39 @@
     const detail = state.currentAnimeDetail;
     if (!voSelect || !detail || !detail.voiceovers) return;
 
-    const currentEp = targetEpOrdinal || state.currentPlayerState.episodeOrdinal || 1;
-    const currentEpObj = (detail.full_episodes || [])[currentEp - 1];
+    const currentEp = Number(targetEpOrdinal || state.currentPlayerState.episodeOrdinal || 1);
+    const currentEpObj = (detail.full_episodes || []).find((e) => Number(e.ordinal) === currentEp);
 
     voSelect.innerHTML = "";
 
-    // 1. AniLibria direct stream if available
+    // 1. AniLibria direct stream if available for this episode
     const anilibriaVo = detail.voiceovers.find((v) => v.id === "anilibria_hls");
     if (anilibriaVo) {
-      const isAlAvail =
-        (!anilibriaVo.ep_min && !anilibriaVo.ep_max) ||
-        (currentEp >= anilibriaVo.ep_min && currentEp <= anilibriaVo.ep_max) ||
-        (currentEpObj && currentEpObj.has_hls);
+      const isAlAvail = Boolean(currentEpObj && currentEpObj.has_hls);
       const opt = document.createElement("option");
       opt.value = anilibriaVo.id || "anilibria_hls";
       opt.dataset.id = anilibriaVo.id || "anilibria_hls";
       opt.dataset.name = anilibriaVo.name;
       opt.dataset.link = anilibriaVo.link || "";
       opt.dataset.shortLabel = "AniLibria.TV (FHD)";
-      opt.dataset.badge = isAlAvail ? "1080p FHD" : `Серии ${anilibriaVo.ep_min || 1}–${anilibriaVo.ep_max || ""}`;
-      opt.textContent = isAlAvail ? anilibriaVo.name : `${anilibriaVo.name} [Недоступно: сер. ${currentEp}]`;
+      const alRange = `${anilibriaVo.ep_min || 1}–${anilibriaVo.ep_max || ""}`;
+      opt.dataset.badge = isAlAvail ? "1080p FHD" : `Доступно: ${alRange} эп.`;
+      opt.textContent = isAlAvail ? anilibriaVo.name : `${anilibriaVo.name} [Доступно: ${alRange} эп.]`;
       if (!isAlAvail) opt.disabled = true;
       voSelect.appendChild(opt);
     }
 
-    // 2. All other voiceovers from detail.voiceovers
+    // 2. All Kodik & fallback voiceovers from detail.voiceovers
     const otherVos = detail.voiceovers.filter((v) => v.id !== "anilibria_hls");
     otherVos.forEach((v) => {
-      const isAvail = (!v.ep_min && !v.ep_max) || (currentEp >= v.ep_min && currentEp <= v.ep_max);
+      const isAvail = v.episodesMap
+        ? Boolean(v.episodesMap[currentEp])
+        : (!v.ep_min && !v.ep_max) || (currentEp >= v.ep_min && currentEp <= v.ep_max);
       const opt = document.createElement("option");
       opt.value = v.id || v.name;
       opt.dataset.id = v.id || v.name;
       opt.dataset.name = v.name;
-      opt.dataset.link = v.link || "";
+      opt.dataset.link = (v.episodesMap && v.episodesMap[currentEp]) || v.link || "";
       opt.dataset.shortLabel = v.name;
       opt.dataset.badge = v.badge || (v.type === "Sub" ? "Субтитры" : "Русская озвучка");
       if (isAvail) {
@@ -2607,7 +2845,7 @@
       } else {
         const rangeStr =
           v.ep_min && v.ep_max && v.ep_max < 99999
-            ? `${v.ep_min}–${v.ep_max} эп.`
+            ? (v.ep_min === v.ep_max ? `${v.ep_min} эп.` : `${v.ep_min}–${v.ep_max} эп.`)
             : v.ep_min > 1
             ? `с ${v.ep_min} эп.`
             : `до ${v.ep_max} эп.`;
@@ -2635,11 +2873,12 @@
       }
     }
 
-    // If current voiceover was not available on this episode, auto-select the best Russian voiceover!
+    // If current voiceover is unavailable on this episode, auto-select best available Russian voiceover
     if (foundIdx === -1) {
       for (let i = 0; i < voSelect.options.length; i++) {
         const opt = voSelect.options[i];
-        if (!opt.disabled && !opt.value.toLowerCase().includes("субтитр")) {
+        const nm = (opt.dataset.name || "").toLowerCase();
+        if (!opt.disabled && !nm.includes("субтитр") && opt.dataset.badge !== "Субтитры") {
           foundIdx = i;
           break;
         }
@@ -2657,16 +2896,10 @@
     if (foundIdx !== -1) {
       voSelect.selectedIndex = foundIdx;
       const chosenOpt = voSelect.options[foundIdx];
-      const prevVo = state.currentPlayerState.voiceoverName;
       state.currentPlayerState.voiceoverId = chosenOpt.dataset.id || chosenOpt.value;
       state.currentPlayerState.voiceoverName = chosenOpt.dataset.name || chosenOpt.textContent;
       state.currentPlayerState.voiceoverLink = chosenOpt.dataset.link || "";
       state.currentPlayerState.voiceoverBadge = chosenOpt.dataset.badge || "";
-      if (prevVo && prevVo !== state.currentPlayerState.voiceoverName) {
-        if (state.hlsInstance || state.currentPlayerState.activeHls) {
-          showToast(`Озвучка: «${state.currentPlayerState.voiceoverName}» (серия ${currentEp})`);
-        }
-      }
     }
 
     if (voSelect._refreshLumaDropdown) {
@@ -2751,56 +2984,136 @@
     destroyActivePlayer();
     const vp = document.getElementById("videoViewport");
     const statusText = document.getElementById("cinemaStatusText");
+    const qWrap = document.getElementById("qualitySelectWrap");
+    const footerPrev = document.getElementById("cinemaFooterPrevBtn");
+    const footerNext = document.getElementById("cinemaFooterNextBtn");
     const detail = state.currentAnimeDetail;
     if (!vp || !detail) return;
 
     const a = detail.anime;
     const fullEpisodes = detail.full_episodes || [];
+    const totalEps = detail.total_available_episodes ?? fullEpisodes.length;
     const mode = state.currentPlayerState.mode;
-    const epOrd = state.currentPlayerState.episodeOrdinal || 1;
+    const epOrd = Number(state.currentPlayerState.episodeOrdinal) || 1;
     const voName = state.currentPlayerState.voiceoverName || "Русская озвучка";
     const q = state.currentPlayerState.quality || "1080";
 
-    recordWatchHistory(a, epOrd, voName);
+    if (footerPrev) footerPrev.disabled = epOrd <= 1 || totalEps <= 0;
+    if (footerNext) footerNext.disabled = epOrd >= totalEps || totalEps <= 0;
 
     const currentEpNumEl = document.getElementById("cinemaCurrentEpNum");
-    if (currentEpNumEl) currentEpNumEl.textContent = String(epOrd);
+    if (currentEpNumEl) currentEpNumEl.textContent = totalEps > 0 ? String(epOrd) : "0";
 
     // Official Trailer Mode
     if (mode === "trailer") {
       const videos = a.videos_clean || [];
       const firstVid = videos[0];
       if (firstVid && firstVid.player_url) {
+        if (qWrap) qWrap.style.display = "none";
         const embedUrl = firstVid.player_url.replace("http://", "https://");
-        vp.innerHTML = `<iframe src="${escapeHtml(embedUrl)}" allowfullscreen allow="autoplay; encrypted-media" style="width:100%;height:100%;border:none;background:#000;"></iframe>`;
+        vp.classList.remove("paused", "show-controls", "hide-cursor");
+        vp.innerHTML = `<div class="luma-clean-embed"><iframe src="${escapeHtml(embedUrl)}" allowfullscreen allow="autoplay; encrypted-media"></iframe></div>`;
         if (statusText) statusText.textContent = `Официальный трейлер: ${firstVid.name}`;
         return;
       }
     }
 
+    if (totalEps <= 0 || fullEpisodes.length === 0) {
+      if (qWrap) qWrap.style.display = "none";
+      vp.classList.add("paused");
+      vp.innerHTML = `
+        <div class="luma-splash-screen" style="cursor:default;">
+          <div class="luma-splash-backdrop" style="background-image: url('${escapeHtml(a.banner_url || getPoster(a))}');"></div>
+          <div class="luma-splash-vignette"></div>
+          <div class="luma-splash-info" style="position:relative; left:auto; bottom:auto; text-align:center; padding:24px;">
+            <span class="luma-splash-ep-pill">Анонс</span>
+            <span class="luma-splash-title" style="display:block; margin-top:10px;">Аниме ещё не вышло</span>
+          </div>
+        </div>
+      `;
+      if (statusText) statusText.textContent = "Премьера скоро — следите за расписанием";
+      return;
+    }
+
+    recordWatchHistory(a, epOrd, voName);
+
     const currentEpObj =
-      fullEpisodes.find((e) => Number(e.ordinal) === Number(epOrd)) ||
+      fullEpisodes.find((e) => Number(e.ordinal) === epOrd) ||
       fullEpisodes[0] ||
       { ordinal: epOrd, name: `Серия ${epOrd}`, preview: a.banner_url || getPoster(a) };
 
     const epPreview = currentEpObj.preview || a.banner_url || getPoster(a);
 
-    function startPlayback() {
-      const myPlaybackToken = ++state.currentPlaybackToken;
+    const findChosenVoiceover = () => {
+      return (
+        (detail.voiceovers || []).find(
+          (v) =>
+            (state.currentPlayerState.voiceoverId && v.id === state.currentPlayerState.voiceoverId) ||
+            (state.currentPlayerState.voiceoverLink && v.link === state.currentPlayerState.voiceoverLink) ||
+            (v.name && v.name.toLowerCase() === voName.toLowerCase())
+        ) || (detail.voiceovers || []).find((v) => v.id !== "anilibria_hls" && v.link) || (detail.voiceovers || [])[0]
+      );
+    };
+
+    const buildCleanKodikUrl = (chosenVo, episodeNum) => {
+      let rawUrl =
+        chosenVo?.episodesMap?.[episodeNum] ||
+        state.currentPlayerState.voiceoverLink ||
+        chosenVo?.link ||
+        currentEpObj.kodik_link ||
+        `https://kodikplayer.com/find-player?shikimoriID=${a.id}`;
+
+      if (rawUrl.startsWith("//")) rawUrl = `https:${rawUrl}`;
+      try {
+        const u = new URL(rawUrl);
+        if (u.pathname.includes("/serial/") || u.pathname.includes("/find-player")) {
+          u.searchParams.set("episode", String(episodeNum));
+          u.searchParams.set("only_episode", "true");
+        }
+        u.searchParams.set("translations", "false");
+        return u.toString();
+      } catch (_) {
+        const cleaned = rawUrl.replace(/[?&]episode=\d+/, "");
+        const sep = cleaned.includes("?") ? "&" : "?";
+        return `${cleaned}${sep}episode=${episodeNum}&only_episode=true&translations=false`;
+      }
+    };
+
+    const mountCleanKodikIframe = (chosenVo, customUrl = null) => {
+      if (qWrap) qWrap.style.display = "none";
+      vp.classList.remove("paused", "show-controls", "hide-cursor");
+      const balancerUrl = customUrl || buildCleanKodikUrl(chosenVo, epOrd);
+      vp.innerHTML = `
+        <div class="luma-clean-embed">
+          <iframe
+            id="lumaActiveFrame"
+            src="${escapeHtml(balancerUrl)}"
+            allowfullscreen
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          ></iframe>
+        </div>
+      `;
+      if (statusText) {
+        statusText.textContent = `Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${chosenVo?.name || state.currentPlayerState.voiceoverName}`;
+      }
+    };
+
+    const mountNativeHlsPlayer = (streamUrl, onFatalFallback = null) => {
+      if (qWrap) qWrap.style.display = "";
       vp.classList.add("paused");
       vp.innerHTML = `
         <video id="lumaHlsVideo" playsinline poster="${escapeHtml(epPreview)}"></video>
         <button id="skipRecapFloatingBtn" class="skip-recap-btn hidden" type="button">↺ Повтор +90с</button>
         <button id="skipOpeningFloatingBtn" class="skip-opening-btn hidden" type="button">⏭ Пропустить опенинг</button>
 
-        <!-- Custom LumaPlayer Slate-Violet Controls Overlay -->
+        <!-- Custom LumaPlayer Slate-Violet Controls Overlay (Native HLS ONLY) -->
         <div class="luma-player-ui" id="lumaPlayerUi">
           <div class="luma-player-top">
             <span class="luma-player-ep-badge">
               Серия ${epOrd}: ${escapeHtml(currentEpObj.name || `Эпизод ${epOrd}`)}
             </span>
             <span class="meta-tag-pill" id="lumaPlayerMetaPill">
-              ${escapeHtml(voName)} • ${q}p
+              ${escapeHtml(state.currentPlayerState.voiceoverName || voName)} • ${q}p
             </span>
           </div>
 
@@ -2875,96 +3188,90 @@
       const video = document.getElementById("lumaHlsVideo");
       const skipBtn = document.getElementById("skipOpeningFloatingBtn");
 
-      function attachStreamToVideo(hlsUrl) {
-        const restoreTimeAndPlay = () => {
-          if (state.currentPlayerState.savedCurrentTime > 1) {
-            try {
-              video.currentTime = state.currentPlayerState.savedCurrentTime;
-            } catch (_) {}
-          }
-          video.playbackRate = state.currentPlayerState.playbackRate || 1;
-          video.play().catch(() => {});
-        };
-
-        if (window.Hls && window.Hls.isSupported()) {
-          const hls = new window.Hls({
-            enableWorker: true,
-            lowLatencyMode: true,
-            backBufferLength: 30,
-            maxBufferLength: 25,
-            maxMaxBufferLength: 50,
-            maxBufferSize: 25 * 1000 * 1000,
-            liveSyncDurationCount: 2,
-            nudgeOffset: 0.1,
-            nudgeMaxRetry: 5
-          });
-          state.hlsInstance = hls;
-          hls.loadSource(hlsUrl);
-          hls.attachMedia(video);
-          hls.on(window.Hls.Events.MANIFEST_PARSED, restoreTimeAndPlay);
-        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = hlsUrl;
-          video.addEventListener("loadedmetadata", restoreTimeAndPlay, { once: true });
+      const restoreTimeAndPlay = () => {
+        if (state.currentPlayerState.savedCurrentTime > 1) {
+          try {
+            video.currentTime = state.currentPlayerState.savedCurrentTime;
+          } catch (_) {}
         }
+        video.playbackRate = state.currentPlayerState.playbackRate || 1;
+        video.play().catch(() => {});
+      };
 
-        bindCustomVideoControls(vp, video, skipBtn, currentEpObj);
+      if (window.Hls && window.Hls.isSupported()) {
+        const hls = new window.Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          maxBufferLength: 25,
+          maxMaxBufferLength: 50,
+          maxBufferSize: 25 * 1000 * 1000,
+          liveSyncDurationCount: 2,
+          nudgeOffset: 0.1,
+          nudgeMaxRetry: 5
+        });
+        state.hlsInstance = hls;
+        hls.loadSource(streamUrl);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.MANIFEST_PARSED, restoreTimeAndPlay);
+        hls.on(window.Hls.Events.ERROR, (_, errData) => {
+          if (errData && errData.fatal && onFatalFallback) {
+            destroyActivePlayer();
+            onFatalFallback();
+          }
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = streamUrl;
+        video.addEventListener("loadedmetadata", restoreTimeAndPlay, { once: true });
+        video.addEventListener("error", () => {
+          if (onFatalFallback) {
+            destroyActivePlayer();
+            onFatalFallback();
+          }
+        }, { once: true });
       }
 
-      // Check if AniLibria direct stream is available for this episode and chosen
-      const isAnilibriaChosen = voName.toLowerCase().includes("anilibria");
-      if (isAnilibriaChosen && currentEpObj.has_hls && (currentEpObj.hls_1080 || currentEpObj.hls_720 || currentEpObj.hls_480)) {
+      bindCustomVideoControls(vp, video, skipBtn, currentEpObj);
+    };
+
+    const isAnilibriaChosen =
+      state.currentPlayerState.voiceoverId === "anilibria_hls" ||
+      voName.toLowerCase().includes("anilibria");
+    const canUseNativeAnilibria = Boolean(
+      isAnilibriaChosen &&
+        currentEpObj.has_hls &&
+        (currentEpObj.hls_1080 || currentEpObj.hls_720 || currentEpObj.hls_480)
+    );
+
+    if (qWrap) qWrap.style.display = canUseNativeAnilibria ? "" : "none";
+
+    function startPlayback() {
+      const myPlaybackToken = ++state.currentPlaybackToken;
+
+      // Path 1: AniLibria direct 1080p/720p/480p HLS Stream -> Native LumaPlayer!
+      if (canUseNativeAnilibria) {
         const hlsUrl =
           (q === "1080" && currentEpObj.hls_1080) ||
           (q === "720" && currentEpObj.hls_720) ||
           currentEpObj.hls_480 ||
           currentEpObj.hls_1080 ||
           currentEpObj.hls_720;
-        attachStreamToVideo(hlsUrl);
-        if (statusText) statusText.textContent = `LumaPlayer ${q}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${voName}`;
-        return;
-      }
-
-      // Check if running on local server vs static GitHub Pages host
-      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      if (!isLocal) {
-        if (myPlaybackToken !== state.currentPlaybackToken) return;
-
-        // Resolve exact player URL for chosen translation
-        const chosenVo =
-          (detail.voiceovers || []).find(
-            (v) => (state.currentPlayerState.voiceoverId && v.id === state.currentPlayerState.voiceoverId) ||
-                   (state.currentPlayerState.voiceoverLink && v.link === state.currentPlayerState.voiceoverLink) ||
-                   (v.name && v.name.toLowerCase() === voName.toLowerCase())
-          ) || (detail.voiceovers || [])[0];
-
-        let balancerUrl = chosenVo?.link || state.currentPlayerState.voiceoverLink || currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
-
-        if (balancerUrl.startsWith("//")) {
-          balancerUrl = "https:" + balancerUrl;
-        }
-
-        balancerUrl = balancerUrl.replace(/[?&]episode=\d+/, "");
-        balancerUrl += (balancerUrl.includes("?") ? `&episode=${epOrd}` : `?episode=${epOrd}`);
-
-        vp.innerHTML = `
-          <div class="luma-clean-embed" style="position:relative; width:100%; height:100%; background:#000; border-radius:inherit; overflow:hidden;">
-            <iframe
-              id="lumaActiveFrame"
-              src="${escapeHtml(balancerUrl)}"
-              allowfullscreen
-              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-              style="width:100%; height:100%; border:none; background:#000; display:block;"
-            ></iframe>
-          </div>
-        `;
-
+        const kodikFallbackVo = (detail.voiceovers || []).find((v) => v.id !== "anilibria_hls" && v.link) || findChosenVoiceover();
+        mountNativeHlsPlayer(hlsUrl, () => mountCleanKodikIframe(kodikFallbackVo));
         if (statusText) {
-          statusText.textContent = `Плеер Kodik • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${chosenVo?.name || state.currentPlayerState.voiceoverName}`;
+          statusText.textContent = `LumaPlayer ${q}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${voName}`;
         }
         return;
       }
 
-      // Otherwise fetch stream directly from local /api/stream with AbortController
+      // Path 2: Static Web Host -> Clean Kodik Iframe (zero overlapping HUD!)
+      if (!USE_LOCAL_API) {
+        if (myPlaybackToken !== state.currentPlaybackToken) return;
+        mountCleanKodikIframe(findChosenVoiceover());
+        return;
+      }
+
+      // Path 3: Optional Local Dev Backend HLS extraction with clean fallback
       if (statusText) statusText.textContent = `Подключение потока серии ${epOrd} (${voName})...`;
       state.streamAbortController = new AbortController();
       const currentSignal = state.streamAbortController.signal;
@@ -2983,31 +3290,26 @@
             Object.values(streams)[0];
 
           if (!streamUrl) {
-            const fallbackLink = resData?.fallback_player || currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
-            vp.innerHTML = `<iframe src="${escapeHtml(fallbackLink)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture" style="width:100%;height:100%;border:none;background:#000;"></iframe>`;
-            if (statusText) statusText.textContent = `Плеер Kodik • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+            mountCleanKodikIframe(findChosenVoiceover(), resData?.fallback_player ? buildCleanKodikUrl({ link: resData.fallback_player }, epOrd) : null);
             return;
           }
 
           if (resData.active_translation) {
             state.currentPlayerState.voiceoverName = resData.active_translation;
-            const metaPill = document.getElementById("lumaPlayerMetaPill");
-            if (metaPill) metaPill.textContent = `${resData.active_translation} • ${q}p`;
           }
-
           if (resData.translations && resData.translations.length > 0) {
             updateDynamicTranslationsDropdown(resData.translations, resData.active_translation);
           }
 
-          attachStreamToVideo(streamUrl);
-          if (statusText) statusText.textContent = `LumaPlayer • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+          mountNativeHlsPlayer(streamUrl, () => mountCleanKodikIframe(findChosenVoiceover()));
+          if (statusText) {
+            statusText.textContent = `LumaPlayer • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${state.currentPlayerState.voiceoverName}`;
+          }
         })
         .catch((err) => {
           if (err && err.name === "AbortError") return;
           if (myPlaybackToken !== state.currentPlaybackToken) return;
-          const fallbackLink = currentEpObj.kodik_link || `https://kodikplayer.com/find-player?shikimoriID=${a.id}&episode=${epOrd}`;
-          vp.innerHTML = `<iframe src="${escapeHtml(fallbackLink)}" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture" style="width:100%;height:100%;border:none;background:#000;"></iframe>`;
-          if (statusText) statusText.textContent = `Плеер Kodik • Серия ${epOrd} из ${detail.total_available_episodes}`;
+          mountCleanKodikIframe(findChosenVoiceover());
         });
     }
 
@@ -3079,21 +3381,25 @@
       document.getElementById("lumaSplashResumeBtn")?.addEventListener("click", (e) => {
         e.stopPropagation();
         state.currentPlayerState.episodeOrdinal = pEp;
+        state.currentPlayerState.voiceoverId = "";
         state.currentPlayerState.voiceoverName = pVo;
         state.currentPlayerState.savedCurrentTime = prog.currentTime;
+        state.currentPlayerState.epRangeIndex = Math.floor((pEp - 1) / 100);
         populateVoiceoverDropdown(pEp);
         renderEpisodesSidebarList();
-        startPlayback();
+        renderPlayerViewport(true);
       });
 
       document.getElementById("lumaSplashRestartBtn")?.addEventListener("click", (e) => {
         e.stopPropagation();
         state.currentPlayerState.episodeOrdinal = pEp;
+        state.currentPlayerState.voiceoverId = "";
         state.currentPlayerState.voiceoverName = pVo;
         state.currentPlayerState.savedCurrentTime = 0;
+        state.currentPlayerState.epRangeIndex = Math.floor((pEp - 1) / 100);
         populateVoiceoverDropdown(pEp);
         renderEpisodesSidebarList();
-        startPlayback();
+        renderPlayerViewport(true);
       });
 
       if (statusText) {
@@ -3163,9 +3469,6 @@
 
     vp.addEventListener("mousemove", resetInactivityTimer);
     vp.addEventListener("mousedown", resetInactivityTimer);
-    document.addEventListener("keydown", (e) => {
-      if (state.currentView === "anime") resetInactivityTimer();
-    });
 
     vp.addEventListener("mouseleave", () => {
       if (!video.paused) {
@@ -3544,10 +3847,7 @@
       timer = setTimeout(async () => {
         try {
           let items = null;
-          items = await fastFetchJson(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=10`, 1800);
-          if (Array.isArray(items)) items = rerankSearchResultsClient(items, q).slice(0, 8);
-          const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-          if (isLocal) {
+          if (USE_LOCAL_API) {
             try {
               const res = await fetch(`/api/catalog?search=${encodeURIComponent(q)}&limit=8`);
               if (res.ok) {
@@ -3557,14 +3857,10 @@
             } catch (_) {}
           }
           if (!items) {
-            try {
-              const shikiRes = await fetch(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=15`)
-                .catch(() => fetch(`https://shikimori.io/api/animes?search=${encodeURIComponent(q)}&limit=15`));
-              if (shikiRes && shikiRes.ok) {
-                const raw = await shikiRes.json();
-                items = rerankSearchResultsClient(raw, q).slice(0, 8);
-              }
-            } catch (_) {}
+            const raw = await fastFetchJson(`https://shikimori.io/api/animes?censored=true&search=${encodeURIComponent(q)}&limit=15`, 2400);
+            if (Array.isArray(raw)) {
+              items = rerankSearchResultsClient(raw, q).slice(0, 8);
+            }
           }
           items = items || [];
           if (!items.length) {
@@ -3695,7 +3991,8 @@
       const quickBm = e.target.closest("[data-quick-bookmark]");
       if (quickBm) {
         const id = quickBm.dataset.quickBookmark;
-        const item = state.heroItems.find((h) => String(h.id) === String(id));
+        const pool = [...state.heroItems, ...state.wideShowcaseList, ...state.animeBannerList];
+        const item = pool.find((h) => h && String(h.id) === String(id));
         if (item) {
           if (state.library[id]) {
             delete state.library[id];
@@ -3839,11 +4136,24 @@
     document.getElementById("randomAnimeBtn")?.addEventListener("click", async () => {
       showToast("Подбираем случайное аниме с высоким рейтингом...");
       try {
-        const res = await fetch("/api/random");
-        const data = await res.json();
-        const first = (data.items || [])[0];
+        let items = null;
+        if (USE_LOCAL_API) {
+          try {
+            const res = await fetch("/api/random");
+            if (res.ok) {
+              const data = await res.json();
+              items = data.items || [];
+            }
+          } catch (_) {}
+        }
+        if (!items || !items.length) {
+          items = await fastFetchJson("https://shikimori.io/api/animes?censored=true&order=random&score=7&limit=6", 3200);
+        }
+        const first = Array.isArray(items) ? items.find((x) => x && x.id) : null;
         if (first && first.id) {
           openAnimeDetail(first.id);
+        } else {
+          showToast("Не удалось подобрать случайное аниме, попробуйте ещё раз");
         }
       } catch (_) {}
     });
