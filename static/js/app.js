@@ -362,6 +362,7 @@
     detailCache: {},
     streamUrlCache: {},
     skipTimesCache: {},
+    currentLibraryTab: "all",
     catalog: {
       page: 1,
       search: "",
@@ -662,7 +663,12 @@
         ? anime.image.original
         : `https://shikimori.io${anime.image.original}`;
     }
-    return "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx16498-buvcRTBx4NSm.jpg";
+    if (anime.image && anime.image.preview && !anime.image.preview.includes("missing")) {
+      return anime.image.preview.startsWith("http")
+        ? anime.image.preview
+        : `https://shikimori.io${anime.image.preview}`;
+    }
+    return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 340"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1e1b2e"/><stop offset="1" stop-color="#0f0e17"/></linearGradient></defs><rect width="240" height="340" fill="url(#g)"/><text x="120" y="176" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="24" fill="#8b5cf6">LumaAnime</text></svg>');
   }
 
   function formatEpisodesBadge(anime) {
@@ -698,7 +704,7 @@
       .join("");
   }
 
-  function createAnimeCardHtml(anime) {
+  function createAnimeCardHtml(anime, opts = {}) {
     const id = anime.id;
     const title = escapeHtml(anime.russian || anime.name);
     const poster = escapeHtml(getPoster(anime));
@@ -708,6 +714,7 @@
     const isOngoing = anime.status === "ongoing";
     const libEntry = state.library[id];
     const epsText = formatEpisodesBadge(anime);
+    const showRemove = Boolean(opts && typeof opts === "object" && opts.showRemoveFromLibrary);
 
     return `
       <article class="anime-card" data-anime-id="${id}" tabindex="0" role="button" aria-label="${title}">
@@ -728,17 +735,22 @@
           <span>${year || "Анонс"}</span>
           ${epsText ? `<span>•</span><span>${escapeHtml(epsText)}</span>` : ""}
         </div>
+        ${
+          showRemove
+            ? `<button type="button" class="card-remove-lib-btn" data-remove-library="${id}" aria-label="Удалить ${title} из коллекции">✕ Удалить из коллекции</button>`
+            : ""
+        }
       </article>
     `;
   }
 
-  function renderAnimeGrid(container, items, emptyMessage = "Тайтлы по заданным параметрам не найдены.") {
+  function renderAnimeGrid(container, items, emptyMessage = "Тайтлы по заданным параметрам не найдены.", opts = {}) {
     if (!container) return;
     if (!items || !items.length) {
       container.innerHTML = `<div style="grid-column: 1 / -1; padding: 36px; text-align:center; color: var(--text-secondary); background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-subtle);">${escapeHtml(emptyMessage)}</div>`;
       return;
     }
-    container.innerHTML = items.map(createAnimeCardHtml).join("");
+    container.innerHTML = items.map((item) => createAnimeCardHtml(item, opts)).join("");
   }
 
   // =========================================================================
@@ -1398,52 +1410,324 @@
     });
   }
 
-  function rerankSearchResultsClient(items, query) {
+  const ANIME_KEYWORD_ALIASES = [
+    { keys: ["сбр", "sbr", "стил бол ран", "стальной шар", "гонка стального", "гонка стальной", "джонни джостар", "джайро", "7 часть джоджо", "steel ball"], queries: ["Steel Ball Run", "Стальной шар"], boostIds: [61469] },
+    { keys: ["джоджо", "джо джо", "jojo", "жожо", "дио", "джотаро", "джорно", "стенд"], queries: ["JoJo no Kimyou na Bouken", "Невероятное приключение ДжоДжо"], boostIds: [14719] },
+    { keys: ["магичка", "жжк", "jjk", "магич битва", "магическая битва", "годжо", "итадори", "сукуна"], queries: ["Jujutsu Kaisen", "Магическая битва"], boostIds: [40748] },
+    { keys: ["аот", "aot", "ат", "титаны", "атака титанов", "вторжение гигантов", "эрен", "леви", "микаса"], queries: ["Shingeki no Kyojin", "Атака титанов"], boostIds: [16498] },
+    { keys: ["крд", "клинок", "клинок рассекающий", "демон слеер", "танджиро", "незуко", "kimetsu"], queries: ["Kimetsu no Yaiba", "Клинок, рассекающий демонов"], boostIds: [38000] },
+    { keys: ["чб", "человек бензопила", "бензопила", "человек-бензопила", "резе", "дэндзи", "макима", "пауэр", "chainsaw"], queries: ["Chainsaw Man", "Человек-бензопила"], boostIds: [44511, 57555] },
+    { keys: ["вп", "ванпис", "ван пис", "one piece", "луффи", "зоро", "санджи", "мугивара"], queries: ["One Piece", "Ван-Пис"], boostIds: [21] },
+    { keys: ["мга", "mha", "bnha", "геройка", "моя геройская", "деку", "бакуго", "тодороки", "всемогущий"], queries: ["Boku no Hero Academia", "Моя геройская академия"], boostIds: [] },
+    { keys: ["соло", "соло левелинг", "поднятие уровня", "джинву", "сон джин", "solo leveling"], queries: ["Ore dake Level Up na Ken", "Поднятие уровня в одиночку"], boostIds: [52299] },
+    { keys: ["дн", "тетрадь смерти", "тетрадка", "смерти", "лайт", "рюк", "death note"], queries: ["Death Note", "Тетрадь смерти"], boostIds: [1535] },
+    { keys: ["фма", "fma", "fmab", "алхимик", "стальной алхимик", "эдвард элрик"], queries: ["Fullmetal Alchemist", "Стальной алхимик"], boostIds: [5114] },
+    { keys: ["опм", "opm", "ванпанчмен", "ван панч", "сайтама", "генос"], queries: ["One Punch Man", "Ванпанчмен"], boostIds: [30276] },
+    { keys: ["фрирен", "провожающая", "гиммель", "ферн", "frieren"], queries: ["Sousou no Frieren", "Провожающая в последний путь Фрирен"], boostIds: [52991] },
+    { keys: ["ххх", "hxh", "хантер", "охотник х охотник", "киллуа", "курапика", "хисока"], queries: ["Hunter x Hunter", "Охотник х Охотник"], boostIds: [] },
+    { keys: ["сао", "sao", "мастера меча", "кирито", "асуна"], queries: ["Sword Art Online", "Мастера Меча Онлайн"], boostIds: [] },
+    { keys: ["ева", "евангелион", "синдзи", "рей", "аска", "evangelion"], queries: ["Neon Genesis Evangelion", "Евангелион"], boostIds: [] },
+    { keys: ["гиас", "код гиас", "лелуш", "geass"], queries: ["Code Geass", "Код Гиас"], boostIds: [] },
+    { keys: ["гуль", "токийский гуль", "канеки", "ghoul"], queries: ["Tokyo Ghoul", "Токийский гуль"], boostIds: [] },
+    { keys: ["наруто", "нарик", "саске", "учиха", "шипуден", "ураганные хроники", "naruto"], queries: ["Naruto", "Наруто"], boostIds: [] },
+    { keys: ["блич", "ичиго", "тысячелетняя", "ткв", "bleach"], queries: ["Bleach", "Блич"], boostIds: [] },
+    { keys: ["берсерк", "гатс", "гриффит", "berserk"], queries: ["Berserk", "Берсерк"], boostIds: [] },
+    { keys: ["дандадан", "окарун", "момо", "dandadan"], queries: ["Dandadan", "Дандадан"], boostIds: [] },
+    { keys: ["блюлок", "блю лок", "синяя тюрьма", "исаги", "blue lock"], queries: ["Blue Lock", "Синяя тюрьма"], boostIds: [] },
+    { keys: ["безработный", "реинкарнация безработного", "рудеус", "mushoku"], queries: ["Mushoku Tensei", "Реинкарнация безработного"], boostIds: [] },
+    { keys: ["резеро", "ре зеро", "rezero", "субару", "рем", "эмилия"], queries: ["Re:Zero", "Re:Zero kara Hajimeru Isekai Seikatsu"], boostIds: [] },
+    { keys: ["слизь", "о моем перерождении в слизь", "римуру", "slime"], queries: ["Tensei shitara Slime Datta Ken", "О моём перерождении в слизь"], boostIds: [] },
+    { keys: ["щит", "герой щита", "наофуми", "рафталия"], queries: ["Tate no Yuusha", "Восхождение героя щита"], boostIds: [] },
+    { keys: ["тень", "восхождение в тени", "сид кагено", "eminence"], queries: ["Kage no Jitsuryokusha", "Восхождение в тени"], boostIds: [] },
+    { keys: ["монолог", "монолог фармацевта", "аптекарь", "маомао", "jinshi"], queries: ["Kusuriya no Hitorigoto", "Монолог фармацевта"], boostIds: [] },
+    { keys: ["шпион", "семья шпиона", "аня форджер", "лойд", "йор"], queries: ["Spy x Family", "Семья шпиона"], boostIds: [] },
+    { keys: ["звездное дитя", "оши но ко", "ай хошино", "аква", "руби"], queries: ["Oshi no Ko", "Звёздное дитя"], boostIds: [] },
+    { keys: ["стоун", "доктор стоун", "сенку", "dr stone"], queries: ["Dr. Stone", "Доктор Стоун"], boostIds: [] },
+    { keys: ["клевер", "черный клевер", "аста", "юно"], queries: ["Black Clover", "Чёрный клевер"], boostIds: [] },
+    { keys: ["винланд", "сага о винланде", "торфинн", "аскеладд"], queries: ["Vinland Saga", "Сага о Винланде"], boostIds: [] },
+    { keys: ["волейбол", "хайкью", "хината шое", "кагеяма"], queries: ["Haikyuu", "Волейбол"], boostIds: [] },
+    { keys: ["куроко", "баскетбол куроко"], queries: ["Kuroko no Basket", "Баскетбол Куроко"], boostIds: [] },
+    { keys: ["штейн", "врата штейна", "окабэ", "курису"], queries: ["Steins;Gate", "Врата Штейна"], boostIds: [] },
+    { keys: ["киберпанк", "бегущие по краю", "эджраннерс", "люси", "дэвид"], queries: ["Cyberpunk: Edgerunners", "Киберпанк"], boostIds: [] },
+    { keys: ["кагуя", "госпожа кагуя"], queries: ["Kaguya-sama", "Госпожа Кагуя"], boostIds: [] },
+    { keys: ["коносуба", "мегумин", "казума", "аква"], queries: ["KonoSuba", "Этот замечательный мир"], boostIds: [] },
+    { keys: ["моб", "моб психо", "рейген"], queries: ["Mob Psycho 100", "Моб Психо 100"], boostIds: [] },
+    { keys: ["оверлорд", "повелитель", "айнз"], queries: ["Overlord", "Повелитель"], boostIds: [] },
+    { keys: ["хоримия", "миямура", "хори"], queries: ["Horimiya", "Хоримия"], boostIds: [] },
+    { keys: ["дбз", "dbz", "драгонболл", "драконий жемчуг", "гоку", "вегета"], queries: ["Dragon Ball", "Драконий жемчуг"], boostIds: [] },
+    { keys: ["фейт", "судьба", "артурия", "сейбер", "гильгамеш"], queries: ["Fate/stay night", "Fate/Zero"], boostIds: [] },
+    { keys: ["гатари", "истории монстров", "арараги", "сенджогахара"], queries: ["Bakemonogatari", "Истории монстров"], boostIds: [] },
+    { keys: ["боччи", "рок тихоня", "рок-тихоня", "bocchi"], queries: ["Bocchi the Rock", "Рок-тихоня"], boostIds: [] },
+    { keys: ["кайдзю", "кайдзю номер 8", "кафка хибино"], queries: ["Kaiju No. 8", "Кайдзю номер 8"], boostIds: [] },
+    { keys: ["неверленд", "обещанный неверленд", "норман", "рэй"], queries: ["Yakusoku no Neverland", "Обещанный Неверленд"], boostIds: [] },
+    { keys: ["бездомный бог", "норагами", "ято"], queries: ["Noragami", "Бездомный бог"], boostIds: [] },
+    { keys: ["хвост феи", "фейри тейл", "нацу", "эрза"], queries: ["Fairy Tail", "Хвост Феи"], boostIds: [] },
+    { keys: ["гуррен", "гуррен лаганн", "камина", "симон"], queries: ["Tengen Toppa Gurren Lagann", "Гуррен-Лаганн"], boostIds: [] },
+    { keys: ["бибоп", "ковбой бибоп", "спайк шпигель"], queries: ["Cowboy Bebop", "Ковбой Бибоп"], boostIds: [] },
+    { keys: ["86", "восемьдесят шесть", "лена", "син ноузен"], queries: ["86", "Восемьдесят шесть"], boostIds: [] },
+    { keys: ["форма голоса", "шойя", "шоко"], queries: ["Koe no Katachi", "Форма голоса"], boostIds: [] },
+    { keys: ["твое имя", "кими но на ва"], queries: ["Kimi no Na wa", "Твоё имя"], boostIds: [] },
+    { keys: ["унесенные", "унесенные призраками", "тихиро"], queries: ["Sen to Chihiro", "Унесённые призраками"], boostIds: [] },
+    { keys: ["адский рай", "джигокураку", "габимару"], queries: ["Jigokuraku", "Адский рай"], boostIds: [] },
+    { keys: ["мэшл", "магия и мускулы", "mashle"], queries: ["Mashle", "Магия и мускулы"], boostIds: [] },
+    { keys: ["ветролом", "винд брейкер", "сакура харука"], queries: ["Wind Breaker", "Ветролом"], boostIds: [] },
+    { keys: ["паразит", "миги", "синити"], queries: ["Kiseijuu", "Паразит"], boostIds: [] },
+    { keys: ["шарлотта", "ю отасака"], queries: ["Charlotte", "Шарлотта"], boostIds: [] },
+    { keys: ["виолетта", "вайолет эвергарден"], queries: ["Violet Evergarden", "Вайолет Эвергарден"], boostIds: [] },
+    { keys: ["монстр", "йохан либерт", "тенма"], queries: ["Monster", "Монстр"], boostIds: [] },
+    { keys: ["апрельская ложь", "твоя апрельская ложь"], queries: ["Shigatsu wa Kimi no Uso", "Твоя апрельская ложь"], boostIds: [] },
+    { keys: ["токийские мстители", "мстители", "майки", "такемичи"], queries: ["Tokyo Revengers", "Токийские мстители"], boostIds: [] },
+    { keys: ["семь смертных", "мелиодас", "эсканор"], queries: ["Nanatsu no Taizai", "Семь смертных грехов"], boostIds: [] },
+    { keys: ["пламенная бригада", "бригада пожарных", "синра"], queries: ["Enen no Shouboutai", "Пламенная бригада пожарных"], boostIds: [] },
+  ];
+
+  const EN_TO_RU_KEYS = {
+    q:"й", w:"ц", e:"у", r:"к", t:"е", y:"н", u:"г", i:"ш", o:"щ", p:"з", "[":"х", "]":"ъ",
+    a:"ф", s:"ы", d:"в", f:"а", g:"п", h:"р", j:"о", k:"л", l:"д", ";":"ж", "'":"э",
+    z:"я", x:"ч", c:"с", v:"м", b:"и", n:"т", m:"ь", ",":"б", ".":"ю"
+  };
+
+  function convertKeyboardLayout(str) {
+    return (str || "").toLowerCase().split("").map((ch) => EN_TO_RU_KEYS[ch] || ch).join("");
+  }
+
+  function transliterateRuToLat(str) {
+    const map = {
+      а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"e",ж:"zh",з:"z",и:"i",й:"y",
+      к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",
+      х:"h",ц:"ts",ч:"ch",ш:"sh",щ:"shch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya"
+    };
+    return (str || "").toLowerCase().split("").map((ch) => (ch in map ? map[ch] : ch)).join("");
+  }
+
+  function stemRussianQuery(str) {
+    const suffixes = ["ами","ями","ого","его","ому","ему","ыми","ими","ов","ев","ей","ой","ая","яя","ое","ее","ые","ие","ых","их","ом","ем","ам","ям","ы","и","а","я","у","ю","е"];
+    return (str || "")
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((tok) => {
+        if (/[а-я]/.test(tok) && tok.length >= 5) {
+          for (const suf of suffixes) {
+            if (tok.endsWith(suf) && tok.length - suf.length >= 4) {
+              return tok.slice(0, -suf.length);
+            }
+          }
+        }
+        return tok;
+      })
+      .join(" ");
+  }
+
+  function expandSearchQuery(rawQuery) {
+    const rawTrim = (rawQuery || "").trim();
+    const norm = rawTrim.toLowerCase().replace(/ё/g, "е").replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim();
+    const layoutRu = convertKeyboardLayout(rawTrim).toLowerCase().replace(/ё/g, "е").replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim();
+    const words = norm.split(/\s+/).filter(Boolean);
+
+    const shikimoriQueries = [];
+    const boostIds = new Set();
+    const expandedTerms = [];
+
+    const addQuery = (q) => {
+      const clean = (q || "").trim();
+      if (clean && !shikimoriQueries.includes(clean)) {
+        shikimoriQueries.push(clean);
+      }
+    };
+
+    const matchEntry = (entry, candidateNorm, candidateWords) => {
+      if (!candidateNorm) return false;
+      for (const k of entry.keys) {
+        if (candidateNorm === k || candidateWords.includes(k)) return true;
+        if (k.length >= 4 && candidateNorm.includes(k)) return true;
+        if (candidateNorm.length >= 4 && k.startsWith(candidateNorm)) return true;
+      }
+      return false;
+    };
+
+    for (const entry of ANIME_KEYWORD_ALIASES) {
+      if (
+        matchEntry(entry, norm, words) ||
+        (layoutRu && layoutRu !== norm && matchEntry(entry, layoutRu, layoutRu.split(/\s+/).filter(Boolean)))
+      ) {
+        (entry.queries || []).forEach((q) => {
+          addQuery(q);
+          expandedTerms.push(q.toLowerCase().replace(/ё/g, "е"));
+        });
+        (entry.boostIds || []).forEach((id) => boostIds.add(Number(id)));
+      }
+    }
+
+    if (shikimoriQueries.length === 0) {
+      addQuery(rawTrim);
+      const stemmed = stemRussianQuery(norm);
+      if (stemmed && stemmed !== norm) {
+        addQuery(stemmed);
+        expandedTerms.push(stemmed);
+      }
+      if (/[а-я]/.test(norm) && norm.length >= 2 && norm.length <= 6) {
+        const lat = transliterateRuToLat(norm);
+        if (lat && lat !== norm) {
+          addQuery(lat);
+          expandedTerms.push(lat);
+        }
+      } else if (layoutRu && layoutRu !== norm && /[;,\[\]']/.test(rawTrim)) {
+        addQuery(layoutRu);
+        expandedTerms.push(layoutRu);
+      }
+    } else if (rawTrim && !shikimoriQueries.includes(rawTrim) && norm.length >= 4) {
+      addQuery(rawTrim);
+    }
+
+    return {
+      shikimoriQueries: shikimoriQueries.slice(0, 3),
+      boostIds,
+      expandedTerms,
+    };
+  }
+
+  function rerankSearchResultsClient(items, query, boostIds = new Set(), expandedTerms = []) {
     if (!items || !query) return items;
-    const qNorm = (query || "").toLowerCase().replace(/[^\w\sа-яА-ЯёЁ]/g, " ").replace(/\s+/g, " ").trim();
+    const qNorm = (query || "").toLowerCase().replace(/ё/g, "е").replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim();
+    const qTokens = qNorm.split(/\s+/).filter((t) => t.length >= 2);
+    const expandedTokenSets = (expandedTerms || [])
+      .map((t) => t.replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
 
     const rankScore = (item) => {
       const nameEn = item.name || "";
       const nameRu = item.russian || "";
-      const enNorm = nameEn.toLowerCase().replace(/[^\w\sа-яА-ЯёЁ]/g, " ").replace(/\s+/g, " ").trim();
-      const ruNorm = nameRu.toLowerCase().replace(/[^\w\sа-яА-ЯёЁ]/g, " ").replace(/\s+/g, " ").trim();
+      const enNorm = nameEn.toLowerCase().replace(/ё/g, "е").replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim();
+      const ruNorm = nameRu.toLowerCase().replace(/ё/g, "е").replace(/[^\w\sа-я]/g, " ").replace(/\s+/g, " ").trim();
+      const combined = `${ruNorm} ${enNorm}`;
       const kind = (item.kind || "").toLowerCase();
       const score = parseFloat(item.score || 0);
       const eps = parseInt(item.episodes || 0);
 
       let pts = 0;
+      if (boostIds && boostIds.has(Number(item.id))) pts += 1200;
+
       if (kind === "tv") pts += 240;
-      else if (kind === "movie") pts += 60;
+      else if (kind === "ona") pts += 140;
+      else if (kind === "movie") pts += 120;
       else if (kind.includes("special")) pts += 15;
       else if (kind === "music") pts -= 500;
 
-      pts += score * 22;
+      pts += score * 25;
+      if (score >= 8.0) pts += 260;
+      else if (score >= 7.5) pts += 160;
+      else if (score > 0 && score < 6.5) pts -= 100;
+      if (score === 0 && item.status !== "ongoing") pts -= 180;
+
       if (eps > 1) pts += Math.min(eps, 50) * 2;
 
       if (ruNorm === qNorm || enNorm === qNorm) pts += 450;
       else if (ruNorm.startsWith(qNorm) || enNorm.startsWith(qNorm)) pts += 180;
-      else if (ruNorm.includes(qNorm) || enNorm.includes(qNorm)) pts += 100;
+      else if (ruNorm.includes(qNorm) || enNorm.includes(qNorm)) pts += 120;
 
-      const spinOffs = ["special", "спешл", "movie", "фильм", "ova", "recap", "рекап", "part 2", "snickers", "chibi", "тиби"];
+      if (qTokens.length > 0 && qTokens.every((t) => combined.includes(t))) {
+        pts += 240;
+      }
+
+      for (const exp of expandedTokenSets) {
+        if (ruNorm === exp || enNorm === exp) pts += 320;
+        else if (combined.includes(exp)) pts += 220;
+      }
+
+      const spinOffs = ["special", "спешл", "ova", "recap", "рекап", "chibi", "тиби", "средней школы"];
       for (const m of spinOffs) {
         if (nameEn.toLowerCase().includes(m) || nameRu.toLowerCase().includes(m)) pts -= 90;
       }
 
       const seasons = ["season 2", "2 сезон", "season 3", "3 сезон", "season 4", "4 сезон", "2nd season", "3rd season", "финал", "final"];
       for (const m of seasons) {
-        if (nameEn.toLowerCase().includes(m) || nameRu.toLowerCase().includes(m)) pts -= 60;
+        if (nameEn.toLowerCase().includes(m) || nameRu.toLowerCase().includes(m)) pts -= 50;
       }
 
-      pts += Math.max(0, 40 - (nameRu.length || 0));
       return pts;
     };
 
     return [...items].sort((a, b) => rankScore(b) - rankScore(a));
   }
 
+  async function smartSearchAnime(rawQuery, maxResults = 8, extraParams = "") {
+    const clean = (rawQuery || "").trim();
+    if (!clean) return [];
+
+    const { shikimoriQueries, boostIds, expandedTerms } = expandSearchQuery(clean);
+    const reqs = shikimoriQueries.map((qStr, idx) => {
+      const lim = idx === 0 ? 40 : 20;
+      return fastFetchJson(
+        `https://shikimori.io/api/animes?censored=true&order=popularity&search=${encodeURIComponent(qStr)}&limit=${lim}${extraParams}`,
+        2800
+      );
+    });
+
+    const settled = await Promise.allSettled(reqs);
+    const seen = new Map();
+    for (const res of settled) {
+      if (res.status === "fulfilled" && Array.isArray(res.value)) {
+        for (const item of res.value) {
+          if (item && item.id && !seen.has(Number(item.id))) {
+            seen.set(Number(item.id), item);
+          }
+        }
+      }
+    }
+
+    if (boostIds.size > 0) {
+      const missingIds = Array.from(boostIds).filter((id) => !seen.has(Number(id)));
+      if (missingIds.length > 0) {
+        const direct = await fastFetchJson(
+          `https://shikimori.io/api/animes?censored=true&ids=${missingIds.join(",")}&limit=10${extraParams}`,
+          2500
+        );
+        if (Array.isArray(direct)) {
+          for (const item of direct) {
+            if (item && item.id && !seen.has(Number(item.id))) {
+              seen.set(Number(item.id), item);
+            }
+          }
+        }
+      }
+    }
+
+    return rerankSearchResultsClient(Array.from(seen.values()), clean, boostIds, expandedTerms).slice(0, maxResults);
+  }
+
   async function loadCatalogResults() {
     const grid = document.getElementById("catalogResultsGrid");
     renderSkeletonGrid(grid, 18);
+
+    state.catalogReqId = (state.catalogReqId || 0) + 1;
+    const myCatReqId = state.catalogReqId;
+
+    const filterLabelEl = document.getElementById("mobileFilterToggleText");
+    const summaryEl = document.getElementById("catalogActiveSummary");
+    const activeGenreNames = Array.from(state.catalog.selectedGenres)
+      .map((gid) => GENRES_CONFIG.find((g) => String(g.id) === String(gid))?.name)
+      .filter(Boolean);
+
+    if (filterLabelEl) {
+      filterLabelEl.textContent = activeGenreNames.length
+        ? `Фильтры • ${activeGenreNames.join(", ")}`
+        : state.catalog.search
+          ? `Поиск: ${state.catalog.search}`
+          : "Параметры и фильтры поиска";
+    }
+    if (summaryEl) {
+      if (state.catalog.search && activeGenreNames.length) {
+        summaryEl.textContent = `Поиск «${state.catalog.search}» • Жанры: ${activeGenreNames.join(", ")}`;
+      } else if (state.catalog.search) {
+        summaryEl.textContent = `Результаты поиска: «${state.catalog.search}»`;
+      } else if (activeGenreNames.length) {
+        summaryEl.textContent = `Жанр: ${activeGenreNames.join(", ")}`;
+      } else {
+        summaryEl.textContent = "Показаны самые популярные тайтлы в базе LumaAnime";
+      }
+    }
 
     const params = new URLSearchParams({
       page: String(state.catalog.page),
@@ -1465,7 +1749,7 @@
     document.getElementById("catalogPrevPageBtn").disabled = state.catalog.page <= 1;
     document.getElementById("catalogPrevPageTop").disabled = state.catalog.page <= 1;
 
-    const cacheKey = params.toString();
+    const cacheKey = `v2_${params.toString()}`;
     if (state.catalogCache && state.catalogCache[cacheKey]) {
       renderAnimeGrid(grid, state.catalogCache[cacheKey]);
       const hasMore = state.catalogCache[cacheKey].length >= 24;
@@ -1489,20 +1773,28 @@
     }
 
     if (!items) {
-      let targetUrl = `https://shikimori.io/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}`;
-      if (state.catalog.search) targetUrl += `&search=${encodeURIComponent(state.catalog.search)}`;
-      if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
-      if (state.catalog.kind) targetUrl += `&kind=${state.catalog.kind}`;
-      if (state.catalog.status) targetUrl += `&status=${state.catalog.status}`;
-      if (state.catalog.season) targetUrl += `&season=${encodeURIComponent(state.catalog.season)}`;
-      if (state.catalog.score) targetUrl += `&score=${encodeURIComponent(state.catalog.score)}`;
-      if (state.catalog.selectedGenres.size > 0) targetUrl += `&genre=${Array.from(state.catalog.selectedGenres).join(",")}`;
+      let extraParams = "";
+      if (state.catalog.kind) extraParams += `&kind=${state.catalog.kind}`;
+      if (state.catalog.status) extraParams += `&status=${state.catalog.status}`;
+      if (state.catalog.season) extraParams += `&season=${encodeURIComponent(state.catalog.season)}`;
+      if (state.catalog.score) extraParams += `&score=${encodeURIComponent(state.catalog.score)}`;
+      if (state.catalog.selectedGenres.size > 0) extraParams += `&genre=${Array.from(state.catalog.selectedGenres).join(",")}`;
 
-      items = await fastFetchJson(targetUrl, 3000);
-      if (Array.isArray(items) && state.catalog.search) {
-        items = rerankSearchResultsClient(items, state.catalog.search).slice(0, 24);
+      if (state.catalog.search && state.catalog.page === 1) {
+        items = await smartSearchAnime(state.catalog.search, 24, extraParams);
+      } else {
+        let targetUrl = `https://shikimori.io/api/animes?censored=true&page=${state.catalog.page}&limit=${state.catalog.search ? 30 : 24}${extraParams}`;
+        if (state.catalog.search) targetUrl += `&search=${encodeURIComponent(state.catalog.search)}`;
+        if (state.catalog.order && !state.catalog.search) targetUrl += `&order=${state.catalog.order}`;
+
+        items = await fastFetchJson(targetUrl, 3000);
+        if (Array.isArray(items) && state.catalog.search) {
+          items = rerankSearchResultsClient(items, state.catalog.search).slice(0, 24);
+        }
       }
     }
+
+    if (myCatReqId !== state.catalogReqId) return;
 
     items = items || [];
     state.catalogCache = state.catalogCache || {};
@@ -1666,6 +1958,15 @@
     }
 
     renderScheduleItems(calendarItems);
+
+    const scheduleAnimeObjs = calendarItems.slice(0, 40).map((e) => e.anime).filter(Boolean);
+    if (scheduleAnimeObjs.length) {
+      enrichAnimeWithAniListBanners(scheduleAnimeObjs).then(() => {
+        if (state.currentView === "schedule") {
+          renderScheduleItems(calendarItems);
+        }
+      });
+    }
   }
 
   function renderScheduleItems(calendarItems) {
@@ -1716,6 +2017,7 @@
   }
 
   function renderLibraryView(activeTab = "all") {
+    state.currentLibraryTab = activeTab;
     const statsRow = document.getElementById("libraryStatsRow");
     const grid = document.getElementById("libraryItemsGrid");
     const entries = Object.values(state.library);
@@ -1747,7 +2049,8 @@
     renderAnimeGrid(
       grid,
       filtered,
-      "В этом списке пока пусто. Откройте любое аниме и добавьте его в свою коллекцию LumaAnime."
+      "В этом списке пока пусто. Откройте любое аниме и добавьте его в свою коллекцию LumaAnime.",
+      { showRemoveFromLibrary: true }
     );
   }
 
@@ -2320,6 +2623,16 @@
       </div>
 
       <div class="container detail-main-wrap">
+        <div class="detail-top-nav-bar">
+          <button type="button" class="btn-back-home" data-nav="home">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            <span>На главную</span>
+          </button>
+          <button type="button" class="btn-back-catalog" data-nav="catalog">
+            <span>Каталог</span>
+          </button>
+        </div>
+
         <div class="detail-top-grid">
           <!-- Left Column: Poster & Watchlist Custom Dropdown -->
           <div class="detail-poster-col">
@@ -2332,8 +2645,11 @@
                 <option value="completed" ${currentLibStatus === "completed" ? "selected" : ""}>Просмотрено</option>
                 <option value="favorite" ${currentLibStatus === "favorite" ? "selected" : ""}>★ В любимое</option>
                 <option value="dropped" ${currentLibStatus === "dropped" ? "selected" : ""}>Брошено</option>
-                ${currentLibStatus ? `<option value="remove">Удалить из коллекции</option>` : ""}
+                ${currentLibStatus ? `<option value="remove">✕ Удалить из коллекции</option>` : ""}
               </select>
+              <button type="button" id="detailRemoveWatchlistBtn" class="btn-remove-collection ${currentLibStatus ? "" : "hidden"}">
+                ✕ Удалить из коллекции
+              </button>
               <button type="button" id="detailPlayBtn" class="btn-primary" style="justify-content:center;">
                 <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>К плееру (${totalAvailable} эп.)</span>
@@ -2344,7 +2660,7 @@
           <!-- Right Column: Metadata & Synopsis -->
           <div class="detail-info-col">
             <div class="detail-breadcrumbs">
-              <button class="btn-text" data-nav="catalog">← Вернуться в каталог</button>
+              <button class="btn-text" data-nav="home">← На главную</button>
               <span class="meta-tag-pill">ID Shikimori: ${a.id} • Все вышедшие эпизоды</span>
             </div>
             <h1 class="detail-title-ru">${titleRu}</h1>
@@ -2418,7 +2734,6 @@
           <div class="cinema-toolbar">
             <div class="cinema-toolbar-left">
               <div class="cinema-toolbar-title-wrap">
-                <button type="button" class="btn-text btn-sm" data-nav="catalog" style="padding:0; margin-right:4px;">←</button>
                 <span class="cinema-title-badge">${titleRu}</span>
                 <span class="cinema-ep-indicator">• Серия <strong id="cinemaCurrentEpNum">1</strong> из ${totalAvailable}</span>
               </div>
@@ -2770,11 +3085,44 @@
       vp.innerHTML = "";
       vp.classList.remove("hide-cursor");
       vp.classList.remove("show-controls");
+      vp.classList.remove("is-pseudo-fullscreen");
+    }
+    document.body.classList.remove("luma-pseudo-fs-open");
+    if (state.__playerFsHandler) {
+      document.removeEventListener("fullscreenchange", state.__playerFsHandler);
+      document.removeEventListener("webkitfullscreenchange", state.__playerFsHandler);
+      state.__playerFsHandler = null;
     }
   }
 
   function bindDetailPlayerEvents() {
     const watchlistSelect = document.getElementById("detailWatchlistSelect");
+    const removeWatchlistBtn = document.getElementById("detailRemoveWatchlistBtn");
+
+    function syncDetailWatchlistUi(newStatus) {
+      if (removeWatchlistBtn) {
+        removeWatchlistBtn.classList.toggle("hidden", !newStatus);
+      }
+      if (watchlistSelect) {
+        let removeOpt = Array.from(watchlistSelect.options).find((o) => o.value === "remove");
+        if (newStatus) {
+          if (!removeOpt) {
+            removeOpt = document.createElement("option");
+            removeOpt.value = "remove";
+            removeOpt.textContent = "✕ Удалить из коллекции";
+            watchlistSelect.appendChild(removeOpt);
+          }
+          watchlistSelect.value = newStatus;
+        } else {
+          if (removeOpt) removeOpt.remove();
+          watchlistSelect.value = "";
+        }
+        if (watchlistSelect._refreshLumaDropdown) {
+          watchlistSelect._refreshLumaDropdown();
+        }
+      }
+    }
+
     if (watchlistSelect) {
       watchlistSelect.addEventListener("change", () => {
         const val = watchlistSelect.value;
@@ -2783,6 +3131,7 @@
         if (val === "remove" || val === "") {
           delete state.library[a.id];
           saveLibrary();
+          syncDetailWatchlistUi("");
           showToast(`Удалено из коллекции: ${a.russian || a.name}`);
         } else {
           state.library[a.id] = {
@@ -2800,10 +3149,20 @@
             genres: a.genres || [],
           };
           saveLibrary();
+          syncDetailWatchlistUi(val);
           showToast(`Добавлено в «${WATCHLIST_LABELS[val]}»: ${a.russian || a.name}`);
         }
       });
     }
+
+    removeWatchlistBtn?.addEventListener("click", () => {
+      const a = state.currentAnimeDetail?.anime;
+      if (!a) return;
+      delete state.library[a.id];
+      saveLibrary();
+      syncDetailWatchlistUi("");
+      showToast(`Удалено из коллекции: ${a.russian || a.name}`);
+    });
 
     // Force real-time refresh button on detail page
     document.getElementById("detailForceRefreshBtn")?.addEventListener("click", () => {
@@ -3266,7 +3625,9 @@
       if (qWrap) qWrap.style.display = "";
       vp.classList.add("paused");
       vp.innerHTML = `
-        <video id="lumaHlsVideo" playsinline poster="${escapeHtml(epPreview)}"></video>
+        <video id="lumaHlsVideo" playsinline webkit-playsinline x5-playsinline preload="auto" poster="${escapeHtml(epPreview)}"></video>
+        <div class="luma-dbltap-indicator left" id="lumaDblTapLeft" aria-hidden="true"><span>« 10 сек</span></div>
+        <div class="luma-dbltap-indicator right" id="lumaDblTapRight" aria-hidden="true"><span>10 сек »</span></div>
 
         <!-- Custom LumaPlayer Slate-Violet Controls Overlay (Native HLS ONLY) -->
         <div class="luma-player-ui" id="lumaPlayerUi">
@@ -3286,9 +3647,11 @@
           </button>
 
           <div class="luma-player-bottom">
-            <div class="luma-progress-wrap" id="lumaProgressWrap">
-              <div class="luma-progress-filled" id="lumaProgressFilled">
-                <span class="luma-progress-thumb"></span>
+            <div class="luma-progress-wrap" id="lumaProgressWrap" role="slider" aria-label="Перемотка видео">
+              <div class="luma-progress-track">
+                <div class="luma-progress-filled" id="lumaProgressFilled">
+                  <span class="luma-progress-thumb"></span>
+                </div>
               </div>
             </div>
 
@@ -3362,6 +3725,7 @@
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = streamUrl;
+        video.load();
         video.addEventListener("loadedmetadata", restoreTimeAndPlay, { once: true });
         video.addEventListener("error", () => {
           if (onFatalFallback) {
@@ -3616,32 +3980,91 @@
     const progressWrap = document.getElementById("lumaProgressWrap");
     const progressFilled = document.getElementById("lumaProgressFilled");
     const fsBtn = document.getElementById("lumaFullscreenBtn");
+    const dblLeftEl = document.getElementById("lumaDblTapLeft");
+    const dblRightEl = document.getElementById("lumaDblTapRight");
+
+    let isScrubbing = false;
+    let activePointerId = null;
+    let pendingScrubTime = null;
+    let seekHoldUntil = 0;
+    let seekHoldTarget = null;
+    let deferredSeekTarget = null;
+    let lastPointerSeekAt = 0;
+
+    function getSafeDuration() {
+      return Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : (epObj?.duration || 1440);
+    }
+
+    function renderProgressUi(curSec, durSec) {
+      const dur = durSec > 0 ? durSec : getSafeDuration();
+      const clamped = Math.min(Math.max(0, curSec || 0), dur);
+      const pct = dur > 0 ? Math.min(100, Math.max(0, (clamped / dur) * 100)) : 0;
+      if (progressFilled) progressFilled.style.width = `${pct}%`;
+      if (timeLabel) timeLabel.textContent = `${formatTimeSeconds(clamped)} / ${formatTimeSeconds(dur)}`;
+    }
+
+    function applyVideoSeek(targetSec) {
+      const dur = getSafeDuration();
+      const clamped = Math.min(Math.max(0, Number(targetSec) || 0), dur);
+      renderProgressUi(clamped, dur);
+      seekHoldTarget = clamped;
+      seekHoldUntil = Date.now() + 1200;
+      if (video.readyState >= 1) {
+        deferredSeekTarget = null;
+        try {
+          video.currentTime = clamped;
+        } catch (_) {}
+      } else {
+        deferredSeekTarget = clamped;
+      }
+    }
+
+    const applyDeferredSeek = () => {
+      if (deferredSeekTarget !== null && video.readyState >= 1) {
+        const dur = getSafeDuration();
+        const clamped = Math.min(Math.max(0, deferredSeekTarget), dur);
+        deferredSeekTarget = null;
+        try {
+          video.currentTime = clamped;
+        } catch (_) {}
+      }
+    };
+    video.addEventListener("loadedmetadata", applyDeferredSeek);
+    video.addEventListener("canplay", applyDeferredSeek);
 
     function resetInactivityTimer() {
       vp.classList.add("show-controls");
       vp.classList.remove("hide-cursor");
       clearTimeout(state.hideControlsTimeout);
       state.hideControlsTimeout = setTimeout(() => {
-        if (!video.paused) {
+        if (!video.paused && !isScrubbing) {
           vp.classList.remove("show-controls");
           vp.classList.add("hide-cursor");
         }
       }, 3000);
     }
 
-    vp.addEventListener("touchstart", (e) => {
-      if (e.target.closest("button, input, select, .luma-dropdown")) return;
-      resetInactivityTimer();
+    vp.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button, input, select, .luma-dropdown, .luma-player-bottom, .luma-player-top")) {
+        resetInactivityTimer();
+      }
     }, { passive: true });
 
-    vp.addEventListener("mousemove", resetInactivityTimer);
-    vp.addEventListener("mousedown", resetInactivityTimer);
+    vp.addEventListener("mousemove", (e) => {
+      if (e.pointerType && e.pointerType !== "mouse") return;
+      resetInactivityTimer();
+    });
+    vp.addEventListener("mousedown", (e) => {
+      if (e.button === 0) resetInactivityTimer();
+    });
 
     vp.addEventListener("mouseleave", () => {
-      if (!video.paused) {
+      if (!video.paused && !isScrubbing) {
         clearTimeout(state.hideControlsTimeout);
         state.hideControlsTimeout = setTimeout(() => {
-          if (!video.paused) {
+          if (!video.paused && !isScrubbing) {
             vp.classList.remove("show-controls");
             vp.classList.add("hide-cursor");
           }
@@ -3659,7 +4082,98 @@
       }
     }
 
-    video.addEventListener("click", togglePlay);
+    // YouTube-style Double-Tap Seek (-10s left / +10s right) & Single-Tap HUD/Play
+    let lastTapTime = 0;
+    let lastTapSide = "";
+    let singleTapTimer = null;
+    let dblBadgeTimer = null;
+    let accumSide = "";
+    let accumSeekSec = 0;
+    let lastDblTapAt = 0;
+    let lastVpPointerUpAt = 0;
+
+    function showDoubleTapBadge(side, totalAbsSec) {
+      const targetEl = side === "left" ? dblLeftEl : dblRightEl;
+      const otherEl = side === "left" ? dblRightEl : dblLeftEl;
+      otherEl?.classList.remove("visible");
+      if (!targetEl) return;
+      const span = targetEl.querySelector("span");
+      if (span) {
+        span.textContent = side === "left" ? `« ${totalAbsSec} сек` : `${totalAbsSec} сек »`;
+      }
+      targetEl.classList.add("visible");
+      clearTimeout(dblBadgeTimer);
+      dblBadgeTimer = setTimeout(() => {
+        dblLeftEl?.classList.remove("visible");
+        dblRightEl?.classList.remove("visible");
+      }, 650);
+    }
+
+    function handleViewportTap(clientX, isTouch) {
+      const rect = vp.getBoundingClientRect();
+      if (!rect.width) return;
+      const relX = (clientX - rect.left) / rect.width;
+      const side = relX < 0.4 ? "left" : relX > 0.6 ? "right" : "center";
+      const now = Date.now();
+
+      if (now - lastTapTime < 340 && side === lastTapSide) {
+        clearTimeout(singleTapTimer);
+        singleTapTimer = null;
+        lastTapTime = now;
+
+        if (side === "left" || side === "right") {
+          const delta = side === "left" ? -10 : 10;
+          if (accumSide === side && now - lastDblTapAt < 850) {
+            accumSeekSec += delta;
+          } else {
+            accumSide = side;
+            accumSeekSec = delta;
+          }
+          lastDblTapAt = now;
+          const baseTime = (seekHoldTarget !== null && now < seekHoldUntil)
+            ? seekHoldTarget
+            : (video.currentTime || 0);
+          applyVideoSeek(baseTime + delta);
+          showDoubleTapBadge(side, Math.abs(accumSeekSec));
+        } else {
+          toggleFullscreen();
+        }
+        return;
+      }
+
+      lastTapTime = now;
+      lastTapSide = side;
+      clearTimeout(singleTapTimer);
+      singleTapTimer = setTimeout(() => {
+        singleTapTimer = null;
+        if (isTouch) {
+          if (video.paused) {
+            togglePlay();
+          } else if (!vp.classList.contains("show-controls")) {
+            resetInactivityTimer();
+          } else {
+            vp.classList.remove("show-controls");
+          }
+        } else {
+          togglePlay();
+        }
+      }, 230);
+    }
+
+    vp.addEventListener("pointerup", (e) => {
+      if (isScrubbing || (e.button && e.button !== 0)) return;
+      if (e.target.closest("button, input, select, .luma-dropdown, #lumaProgressWrap, .luma-player-bottom, .luma-player-top")) {
+        return;
+      }
+      lastVpPointerUpAt = Date.now();
+      handleViewportTap(e.clientX, e.pointerType === "touch");
+    });
+
+    video.addEventListener("click", (e) => {
+      if (Date.now() - lastVpPointerUpAt < 400) return;
+      handleViewportTap(e.clientX || (vp.getBoundingClientRect().left + vp.getBoundingClientRect().width / 2), false);
+    });
+
     playPauseBtn?.addEventListener("click", togglePlay);
     centerPlayBtn?.addEventListener("click", togglePlay);
 
@@ -3693,11 +4207,19 @@
     });
 
     rewindBtn?.addEventListener("click", () => {
-      video.currentTime = Math.max(0, video.currentTime - 10);
+      const baseTime = (seekHoldTarget !== null && Date.now() < seekHoldUntil)
+        ? seekHoldTarget
+        : (video.currentTime || 0);
+      applyVideoSeek(baseTime - 10);
+      resetInactivityTimer();
     });
 
     forwardBtn?.addEventListener("click", () => {
-      video.currentTime = Math.min(video.duration || 9999, video.currentTime + 10);
+      const baseTime = (seekHoldTarget !== null && Date.now() < seekHoldUntil)
+        ? seekHoldTarget
+        : (video.currentTime || 0);
+      applyVideoSeek(baseTime + 10);
+      resetInactivityTimer();
     });
 
     volumeSlider?.addEventListener("input", () => {
@@ -3765,16 +4287,20 @@
     const doSkipOpening = () => {
       autoSkippedOp = true;
       if (skipIntervals.op && skipIntervals.op.stop != null) {
-        video.currentTime = skipIntervals.op.stop;
+        applyVideoSeek(skipIntervals.op.stop);
       } else {
-        video.currentTime = Math.min((video.duration || 9999) - 1, (video.currentTime || 0) + 85);
+        applyVideoSeek((video.currentTime || 0) + 85);
       }
       showToast("Опенинг пропущен");
       resetInactivityTimer();
     };
 
     video.addEventListener("playing", checkAutoSkip);
-    video.addEventListener("seeked", checkAutoSkip);
+    video.addEventListener("seeked", () => {
+      seekHoldUntil = 0;
+      seekHoldTarget = null;
+      checkAutoSkip();
+    });
 
     video.addEventListener("ended", () => {
       if (state.currentPlayerState.autoplay !== false) {
@@ -3800,10 +4326,11 @@
       checkAutoSkip();
 
       const cur = video.currentTime || 0;
-      const dur = video.duration || epObj.duration || 1440;
-      const pct = Math.min(100, Math.max(0, (cur / dur) * 100));
-      if (progressFilled) progressFilled.style.width = `${pct}%`;
-      if (timeLabel) timeLabel.textContent = `${formatTimeSeconds(cur)} / ${formatTimeSeconds(dur)}`;
+      const dur = getSafeDuration();
+      const holdingSeek = seekHoldTarget !== null && Date.now() < seekHoldUntil && Math.abs(cur - seekHoldTarget) > 2;
+      if (!isScrubbing && !holdingSeek) {
+        renderProgressUi(cur, dur);
+      }
 
       // Save watch progress every 2 seconds
       if (cur > 2 && !video.paused) {
@@ -3844,11 +4371,69 @@
     window.addEventListener("beforeunload", flushProgressOnExit, { once: true });
     window.addEventListener("pagehide", flushProgressOnExit, { once: true });
 
-    progressWrap?.addEventListener("click", (e) => {
+    // Responsive First-Tap & Smooth Drag Pointer Events Scrubber
+    function clientXToSeekTime(clientX) {
       const rect = progressWrap.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      const dur = video.duration || epObj.duration || 1440;
-      video.currentTime = ratio * dur;
+      if (!rect.width) return 0;
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return ratio * getSafeDuration();
+    }
+
+    progressWrap?.addEventListener("pointerdown", (e) => {
+      if (e.button && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      isScrubbing = true;
+      activePointerId = e.pointerId;
+      progressWrap.classList.add("is-scrubbing");
+      try {
+        progressWrap.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      pendingScrubTime = clientXToSeekTime(e.clientX);
+      renderProgressUi(pendingScrubTime, getSafeDuration());
+      resetInactivityTimer();
+    });
+
+    progressWrap?.addEventListener("pointermove", (e) => {
+      if (!isScrubbing) return;
+      if (activePointerId !== null && e.pointerId !== activePointerId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      pendingScrubTime = clientXToSeekTime(e.clientX);
+      renderProgressUi(pendingScrubTime, getSafeDuration());
+      resetInactivityTimer();
+    });
+
+    const finishScrub = (e, commit) => {
+      if (!isScrubbing) return;
+      if (activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
+      try { e.preventDefault?.(); } catch (_) {}
+      try { e.stopPropagation?.(); } catch (_) {}
+      isScrubbing = false;
+      activePointerId = null;
+      progressWrap.classList.remove("is-scrubbing");
+      try {
+        if (e.pointerId !== undefined) progressWrap.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      if (commit) {
+        const target = pendingScrubTime !== null ? pendingScrubTime : clientXToSeekTime(e.clientX);
+        pendingScrubTime = null;
+        lastPointerSeekAt = Date.now();
+        applyVideoSeek(target);
+      } else {
+        pendingScrubTime = null;
+      }
+      resetInactivityTimer();
+    };
+
+    progressWrap?.addEventListener("pointerup", (e) => finishScrub(e, true));
+    progressWrap?.addEventListener("pointercancel", (e) => finishScrub(e, false));
+
+    progressWrap?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (Date.now() - lastPointerSeekAt < 400) return;
+      applyVideoSeek(clientXToSeekTime(e.clientX));
+      resetInactivityTimer();
     });
 
     const doPrevEpisode = () => {
@@ -3878,13 +4463,112 @@
       }
     };
 
-    fsBtn?.addEventListener("click", () => {
-      if (!document.fullscreenElement) {
-        vp.requestFullscreen?.();
-      } else {
-        document.exitFullscreen?.();
+    // Synchronous Multi-Tier Fullscreen (iOS Safari + Android Chrome + Desktop + Pseudo-FS Fallback)
+    function isAnyFullscreen() {
+      return Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        video.webkitDisplayingFullscreen ||
+        vp.classList.contains("is-pseudo-fullscreen")
+      );
+    }
+
+    function updateFullscreenIcon() {
+      if (!fsBtn) return;
+      const active = isAnyFullscreen();
+      fsBtn.innerHTML = active
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path></svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>`;
+    }
+
+    function enterPseudoFullscreen() {
+      vp.classList.add("is-pseudo-fullscreen");
+      document.body.classList.add("luma-pseudo-fs-open");
+      updateFullscreenIcon();
+      resetInactivityTimer();
+    }
+
+    function exitPseudoFullscreen() {
+      vp.classList.remove("is-pseudo-fullscreen");
+      document.body.classList.remove("luma-pseudo-fs-open");
+      try { screen.orientation?.unlock?.(); } catch (_) {}
+      updateFullscreenIcon();
+    }
+
+    function tryIosNativeVideoFs() {
+      const fn = video.webkitEnterFullscreen || video.webkitEnterFullScreen;
+      if (typeof fn === "function") {
+        try {
+          fn.call(video);
+          return true;
+        } catch (_) {}
       }
-    });
+      return false;
+    }
+
+    function toggleFullscreen(e) {
+      if (e) {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+      }
+      if (vp.classList.contains("is-pseudo-fullscreen")) {
+        exitPseudoFullscreen();
+        return;
+      }
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        const exitFn = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+        try { exitFn?.call(document); } catch (_) {}
+        try { screen.orientation?.unlock?.(); } catch (_) {}
+        return;
+      }
+      if (video.webkitDisplayingFullscreen) {
+        try { (video.webkitExitFullscreen || video.webkitExitFullScreen)?.call(video); } catch (_) {}
+        return;
+      }
+
+      const isIOS = /iP(hone|od|ad)/i.test(navigator.userAgent || "") ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      const reqVpFs = vp.requestFullscreen || vp.webkitRequestFullscreen || vp.mozRequestFullScreen || vp.msRequestFullscreen;
+
+      if ((isIOS || !reqVpFs) && tryIosNativeVideoFs()) {
+        return;
+      }
+
+      if (reqVpFs) {
+        try {
+          const res = reqVpFs.call(vp);
+          if (res && typeof res.then === "function") {
+            res.then(() => {
+              updateFullscreenIcon();
+              if (window.matchMedia?.("(pointer: coarse)")?.matches) {
+                try { screen.orientation?.lock?.("landscape")?.catch?.(() => {}); } catch (_) {}
+              }
+            }).catch(() => {
+              if (!tryIosNativeVideoFs()) enterPseudoFullscreen();
+            });
+          } else {
+            updateFullscreenIcon();
+          }
+          return;
+        } catch (_) {
+          if (tryIosNativeVideoFs()) return;
+        }
+      }
+
+      enterPseudoFullscreen();
+    }
+
+    fsBtn?.addEventListener("click", toggleFullscreen);
+
+    if (state.__playerFsHandler) {
+      document.removeEventListener("fullscreenchange", state.__playerFsHandler);
+      document.removeEventListener("webkitfullscreenchange", state.__playerFsHandler);
+    }
+    state.__playerFsHandler = updateFullscreenIcon;
+    document.addEventListener("fullscreenchange", updateFullscreenIcon);
+    document.addEventListener("webkitfullscreenchange", updateFullscreenIcon);
+    video.addEventListener("webkitbeginfullscreen", updateFullscreenIcon);
+    video.addEventListener("webkitendfullscreen", updateFullscreenIcon);
 
     // Rock-Solid Global Hotkeys Listener
     function handlePlayerKeydown(e) {
@@ -3899,17 +4583,23 @@
       const key = e.key;
       const code = e.code;
 
+      if (key === "Escape" && vp.classList.contains("is-pseudo-fullscreen")) {
+        e.preventDefault();
+        exitPseudoFullscreen();
+        return;
+      }
+
       if (code === "Space" || key === " ") {
         e.preventDefault();
         togglePlay();
       } else if (code === "ArrowLeft" || key === "ArrowLeft") {
         e.preventDefault();
-        video.currentTime = Math.max(0, (video.currentTime || 0) - 10);
+        applyVideoSeek((video.currentTime || 0) - 10);
         resetInactivityTimer();
         showToast("« 10 сек");
       } else if (code === "ArrowRight" || key === "ArrowRight") {
         e.preventDefault();
-        video.currentTime = Math.min((video.duration || 9999) - 1, (video.currentTime || 0) + 10);
+        applyVideoSeek((video.currentTime || 0) + 10);
         resetInactivityTimer();
         showToast("» 10 сек");
       } else if (code === "ArrowUp" || key === "ArrowUp") {
@@ -3960,6 +4650,7 @@
     const wrapper = document.getElementById("searchWrapper");
     const clearBtn = document.getElementById("searchClearBtn");
     let timer = null;
+    let searchReqId = 0;
 
     if (!input || !dropdown) return;
 
@@ -3974,6 +4665,21 @@
       updateSearchUI();
       dropdown.classList.add("hidden");
       input.focus();
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const q = input.value.trim();
+        if (q.length >= 2) {
+          e.preventDefault();
+          dropdown.classList.add("hidden");
+          state.catalog.search = q;
+          state.catalog.page = 1;
+          const catInput = document.getElementById("catalogSearchInput");
+          if (catInput) catInput.value = q;
+          switchView("catalog");
+        }
+      }
     });
 
     document.addEventListener("click", (e) => {
@@ -4004,6 +4710,7 @@
         return;
       }
       timer = setTimeout(async () => {
+        const reqId = ++searchReqId;
         try {
           let items = null;
           if (USE_LOCAL_API) {
@@ -4016,14 +4723,12 @@
             } catch (_) {}
           }
           if (!items) {
-            const raw = await fastFetchJson(`https://shikimori.io/api/animes?censored=true&search=${encodeURIComponent(q)}&limit=15`, 2400);
-            if (Array.isArray(raw)) {
-              items = rerankSearchResultsClient(raw, q).slice(0, 8);
-            }
+            items = await smartSearchAnime(q, 8);
           }
+          if (reqId !== searchReqId) return;
           items = items || [];
           if (!items.length) {
-            dropdown.innerHTML = `<div style="padding:14px; font-size:0.85rem; color:var(--text-secondary);">Ничего не найдено по запросу «${escapeHtml(q)}»</div>`;
+            dropdown.innerHTML = `<div style="padding:14px; font-size:0.85rem; color:var(--text-secondary);">Ничего не найдено по запросу «${escapeHtml(q)}». Попробуйте ключевое слово или полное название.</div>`;
           } else {
             dropdown.innerHTML =
               items
@@ -4048,7 +4753,7 @@
           }
           dropdown.classList.remove("hidden");
         } catch (_) {}
-      }, 120);
+      }, 150);
     });
 
     document.addEventListener("click", (e) => {
@@ -4083,6 +4788,21 @@
       if (navBtn) {
         e.preventDefault();
         switchView(navBtn.dataset.nav);
+        return;
+      }
+
+      const removeLibBtn = e.target.closest("[data-remove-library]");
+      if (removeLibBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = removeLibBtn.dataset.removeLibrary;
+        const removed = state.library[id];
+        if (id && state.library[id]) {
+          delete state.library[id];
+          saveLibrary();
+          showToast(`Удалено из коллекции: ${removed?.russian || removed?.name || "Тайтл"}`);
+          renderLibraryView(state.currentLibraryTab || "all");
+        }
         return;
       }
 
@@ -4192,6 +4912,27 @@
       if (quickGenre) {
         e.preventDefault();
         const gid = quickGenre.dataset.quickGenre;
+        state.catalog.search = "";
+        state.catalog.kind = "";
+        state.catalog.status = "";
+        state.catalog.season = "";
+        state.catalog.score = "";
+        state.catalog.order = "popularity";
+        const catSearchInput = document.getElementById("catalogSearchInput");
+        if (catSearchInput) catSearchInput.value = "";
+        [
+          "catalogSortSelect",
+          "catalogKindSelect",
+          "catalogStatusSelect",
+          "catalogSeasonSelect",
+          "catalogScoreSelect",
+        ].forEach((selId) => {
+          const sel = document.getElementById(selId);
+          if (sel) {
+            sel.selectedIndex = 0;
+            sel._refreshLumaDropdown?.();
+          }
+        });
         state.catalog.selectedGenres = new Set([String(gid)]);
         state.catalog.page = 1;
         syncCatalogGenreChips();
