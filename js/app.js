@@ -92,6 +92,59 @@
     }, 800);
   }
 
+  function normalizeSkipRange(start, stop, isEnding = false) {
+    if (
+      typeof start !== "number" ||
+      typeof stop !== "number" ||
+      !Number.isFinite(start) ||
+      !Number.isFinite(stop) ||
+      start < 0
+    ) {
+      return null;
+    }
+    const len = stop - start;
+    if (len < 5 || len > 240) return null;
+    if (isEnding && start < 180) return null;
+    return { start, stop };
+  }
+
+  function fetchAniSkipTimes(malId, epOrd) {
+    if (!malId || !epOrd) return Promise.resolve({ op: null, ed: null });
+    const key = `${malId}:${epOrd}`;
+    state.skipTimesCache = state.skipTimesCache || {};
+    const existing = state.skipTimesCache[key];
+    if (existing) {
+      return typeof existing.then === "function" ? existing : Promise.resolve(existing);
+    }
+
+    const url = `https://api.aniskip.com/v2/skip-times/${encodeURIComponent(malId)}/${encodeURIComponent(epOrd)}?types=op&types=ed&episodeLength=0`;
+    const reqPromise = fastFetchJson(url, 3500)
+      .then((data) => {
+        const res = { op: null, ed: null };
+        if (data && data.found && Array.isArray(data.results)) {
+          for (const item of data.results) {
+            const st = item?.interval?.startTime;
+            const en = item?.interval?.endTime;
+            if (item?.skipType === "op" && !res.op) {
+              res.op = normalizeSkipRange(st, en, false);
+            } else if (item?.skipType === "ed" && !res.ed) {
+              res.ed = normalizeSkipRange(st, en, true);
+            }
+          }
+        }
+        state.skipTimesCache[key] = res;
+        return res;
+      })
+      .catch(() => {
+        const empty = { op: null, ed: null };
+        state.skipTimesCache[key] = empty;
+        return empty;
+      });
+
+    state.skipTimesCache[key] = reqPromise;
+    return reqPromise;
+  }
+
   async function fastFetchJson(url, timeoutMs = 2800) {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -308,6 +361,7 @@
     catalogCache: {},
     detailCache: {},
     streamUrlCache: {},
+    skipTimesCache: {},
     catalog: {
       page: 1,
       search: "",
@@ -3208,13 +3262,11 @@
       return firstKey ? { quality: firstKey, url: streamsObj[firstKey] } : null;
     };
 
-    const mountNativeHlsPlayer = (streamUrl, actualQuality = q, onFatalFallback = null) => {
+    const mountNativeHlsPlayer = (streamUrl, actualQuality = q, onFatalFallback = null, isAnilibriaSource = false) => {
       if (qWrap) qWrap.style.display = "";
       vp.classList.add("paused");
       vp.innerHTML = `
         <video id="lumaHlsVideo" playsinline poster="${escapeHtml(epPreview)}"></video>
-        <button id="skipRecapFloatingBtn" class="skip-recap-btn hidden" type="button">↺ Повтор +90с</button>
-        <button id="skipOpeningFloatingBtn" class="skip-opening-btn hidden" type="button">⏭ Пропустить опенинг</button>
 
         <!-- Custom LumaPlayer Slate-Violet Controls Overlay (Native HLS ONLY) -->
         <div class="luma-player-ui" id="lumaPlayerUi">
@@ -3263,27 +3315,6 @@
               </div>
 
               <div class="luma-controls-right">
-                <button type="button" class="luma-pill-ctrl" id="lumaSkipRecapBtn" title="Пропустить повтор (+90 сек)">
-                  ↺ Повтор +90с
-                </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaSkipOpeningBtn" title="Пропустить опенинг (+85 сек)">
-                  ⏭ Опенинг
-                </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaSkipEndingBtn" title="Пропустить эндинг">
-                  ⏭ Эндинг
-                </button>
-                <button type="button" class="luma-pill-ctrl ${state.currentPlayerState.autoplay !== false ? "active" : ""}" id="lumaAutoplayBtn" title="Автопереход к следующей серии">
-                  ${state.currentPlayerState.autoplay !== false ? "Авто: ВКЛ" : "Авто: ВЫКЛ"}
-                </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaSpeedBtn" title="Скорость воспроизведения">
-                  ${state.currentPlayerState.playbackRate}x
-                </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaPrevEpBtn" title="Предыдущая серия (P)">
-                  ← Пред.
-                </button>
-                <button type="button" class="luma-pill-ctrl" id="lumaNextEpBtn" title="Следующая серия (N)">
-                  След. →
-                </button>
                 <button type="button" class="luma-ctrl-btn" id="lumaFullscreenBtn" title="На весь экран (F)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;">
                     <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
@@ -3296,7 +3327,6 @@
       `;
 
       const video = document.getElementById("lumaHlsVideo");
-      const skipBtn = document.getElementById("skipOpeningFloatingBtn");
 
       const restoreTimeAndPlay = () => {
         if (state.currentPlayerState.savedCurrentTime > 1) {
@@ -3341,7 +3371,7 @@
         }, { once: true });
       }
 
-      bindCustomVideoControls(vp, video, skipBtn, currentEpObj);
+      bindCustomVideoControls(vp, video, currentEpObj, { isAnilibria: isAnilibriaSource });
     };
 
     const isAnilibriaChosen =
@@ -3357,6 +3387,10 @@
 
     async function startPlayback() {
       const myPlaybackToken = ++state.currentPlaybackToken;
+      const isSingleMovie = a.kind === "movie" && (detail.total_available_episodes || 1) <= 1;
+      if (!isSingleMovie) {
+        fetchAniSkipTimes(a.myanimelist_id || a.id, epOrd).catch(() => {});
+      }
 
       // Path 1: AniLibria direct 1080p/720p/480p HLS Stream -> Native LumaPlayer!
       if (canUseNativeAnilibria) {
@@ -3369,7 +3403,7 @@
           syncQualityDropdownForStreams(alStreams, picked.quality);
           state.currentPlayerState.quality = picked.quality;
           const kodikFallbackVo = (detail.voiceovers || []).find((v) => v.id !== "anilibria_hls" && v.link) || findChosenVoiceover();
-          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(kodikFallbackVo));
+          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(kodikFallbackVo), true);
           if (statusText) {
             statusText.textContent = `LumaPlayer ${picked.quality}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${voName}`;
           }
@@ -3435,7 +3469,7 @@
         if (picked) {
           syncQualityDropdownForStreams(streams, picked.quality);
           state.currentPlayerState.quality = picked.quality;
-          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(chosenVo));
+          mountNativeHlsPlayer(picked.url, picked.quality, () => mountCleanKodikIframe(chosenVo), false);
           if (statusText) {
             statusText.textContent = `LumaPlayer ${picked.quality}p • Серия ${epOrd} из ${detail.total_available_episodes} • Озвучка: ${chosenVo?.name || state.currentPlayerState.voiceoverName}`;
           }
@@ -3571,7 +3605,7 @@
     }
   }
 
-  function bindCustomVideoControls(vp, video, skipBtn, epObj) {
+  function bindCustomVideoControls(vp, video, epObj, opts = {}) {
     const playPauseBtn = document.getElementById("lumaPlayPauseBtn");
     const centerPlayBtn = document.getElementById("lumaCenterPlayBtn");
     const playIcon = document.getElementById("lumaPlayIcon");
@@ -3581,8 +3615,6 @@
     const timeLabel = document.getElementById("lumaTimeLabel");
     const progressWrap = document.getElementById("lumaProgressWrap");
     const progressFilled = document.getElementById("lumaProgressFilled");
-    const speedBtn = document.getElementById("lumaSpeedBtn");
-    const nextEpBtn = document.getElementById("lumaNextEpBtn");
     const fsBtn = document.getElementById("lumaFullscreenBtn");
 
     function resetInactivityTimer() {
@@ -3672,54 +3704,77 @@
       video.volume = Number(volumeSlider.value);
     });
 
-    const recapFloat = document.getElementById("skipRecapFloatingBtn");
-    const openingFloat = document.getElementById("skipOpeningFloatingBtn");
-    const skipRecapBtn = document.getElementById("lumaSkipRecapBtn");
-    const skipOpeningBtn = document.getElementById("lumaSkipOpeningBtn");
-    const skipEndingBtn = document.getElementById("lumaSkipEndingBtn");
-    const autoplayBtn = document.getElementById("lumaAutoplayBtn");
+    // Always-On Automatic Opening & Ending Skip (AniLibria + AniSkip API)
+    const alOp = normalizeSkipRange(epObj?.opening?.start, epObj?.opening?.stop, false);
+    const alEd = normalizeSkipRange(epObj?.ending?.start, epObj?.ending?.stop, true);
+    const skipIntervals = { op: alOp, ed: alEd };
+    let autoSkippedOp = false;
+    let autoSkippedEd = false;
 
-    const doSkipRecap = () => {
-      video.currentTime = Math.min((video.duration || 9999) - 1, (video.currentTime || 0) + 90);
-      showToast("Повтор пропущен (+90 сек)");
-      resetInactivityTimer();
-    };
-    skipRecapBtn?.addEventListener("click", doSkipRecap);
-    recapFloat?.addEventListener("click", doSkipRecap);
+    const animeObj = state.currentAnimeDetail?.anime;
+    const malId = animeObj?.myanimelist_id || animeObj?.id;
+    const curEpOrd = Number(state.currentPlayerState.episodeOrdinal) || Number(epObj?.ordinal) || 1;
+    const isSingleMovie = animeObj?.kind === "movie" && (state.currentAnimeDetail?.total_available_episodes || 1) <= 1;
+
+    function checkAutoSkip() {
+      if (!video || !document.body.contains(video) || video.paused || video.seeking || video.readyState < 1) {
+        return;
+      }
+      const cur = video.currentTime || 0;
+      const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : (epObj?.duration || 0);
+
+      if (!autoSkippedOp && skipIntervals.op && cur >= skipIntervals.op.start && cur < skipIntervals.op.stop - 1.5) {
+        autoSkippedOp = true;
+        const target = dur > 0 ? Math.min(skipIntervals.op.stop, Math.max(0, dur - 0.5)) : skipIntervals.op.stop;
+        video.currentTime = target;
+        showToast("Опенинг автоматически пропущен");
+        return;
+      }
+
+      if (
+        !autoSkippedEd &&
+        skipIntervals.ed &&
+        dur > 0 &&
+        skipIntervals.ed.start >= dur * 0.4 &&
+        cur >= skipIntervals.ed.start &&
+        cur < skipIntervals.ed.stop - 1.5
+      ) {
+        autoSkippedEd = true;
+        const target = skipIntervals.ed.stop >= dur - 2
+          ? Math.max(0, dur - 0.5)
+          : Math.min(skipIntervals.ed.stop, Math.max(0, dur - 0.5));
+        video.currentTime = target;
+        showToast("Эндинг автоматически пропущен");
+      }
+    }
+
+    if (!isSingleMovie && malId) {
+      fetchAniSkipTimes(malId, curEpOrd).then((aniSkip) => {
+        if (!document.body.contains(video) || !aniSkip) return;
+        if (opts.isAnilibria) {
+          if (!skipIntervals.op && aniSkip.op) skipIntervals.op = aniSkip.op;
+          if (!skipIntervals.ed && aniSkip.ed) skipIntervals.ed = aniSkip.ed;
+        } else {
+          skipIntervals.op = aniSkip.op || alOp || skipIntervals.op;
+          skipIntervals.ed = aniSkip.ed || alEd || skipIntervals.ed;
+        }
+        checkAutoSkip();
+      });
+    }
 
     const doSkipOpening = () => {
-      if (epObj.opening && epObj.opening.stop != null) {
-        video.currentTime = epObj.opening.stop;
+      autoSkippedOp = true;
+      if (skipIntervals.op && skipIntervals.op.stop != null) {
+        video.currentTime = skipIntervals.op.stop;
       } else {
         video.currentTime = Math.min((video.duration || 9999) - 1, (video.currentTime || 0) + 85);
       }
-      openingFloat?.classList.add("hidden");
       showToast("Опенинг пропущен");
       resetInactivityTimer();
     };
-    skipOpeningBtn?.addEventListener("click", doSkipOpening);
-    openingFloat?.addEventListener("click", doSkipOpening);
 
-    const doSkipEnding = () => {
-      if (epObj.ending && epObj.ending.start != null) {
-        video.currentTime = epObj.ending.start;
-      } else if (video.duration && video.duration > 10) {
-        video.currentTime = Math.max(0, video.duration - 2);
-      } else {
-        nextEpBtn?.click();
-      }
-      showToast("Эндинг пропущен");
-      resetInactivityTimer();
-    };
-    skipEndingBtn?.addEventListener("click", doSkipEnding);
-
-    autoplayBtn?.addEventListener("click", () => {
-      state.currentPlayerState.autoplay = !(state.currentPlayerState.autoplay !== false);
-      const isAuto = state.currentPlayerState.autoplay;
-      autoplayBtn.textContent = isAuto ? "Авто: ВКЛ" : "Авто: ВЫКЛ";
-      autoplayBtn.classList.toggle("active", isAuto);
-      showToast(isAuto ? "Автопереход к след. серии включен" : "Автопереход выключен");
-    });
+    video.addEventListener("playing", checkAutoSkip);
+    video.addEventListener("seeked", checkAutoSkip);
 
     video.addEventListener("ended", () => {
       if (state.currentPlayerState.autoplay !== false) {
@@ -3742,30 +3797,13 @@
     });
 
     video.addEventListener("timeupdate", () => {
+      checkAutoSkip();
+
       const cur = video.currentTime || 0;
       const dur = video.duration || epObj.duration || 1440;
       const pct = Math.min(100, Math.max(0, (cur / dur) * 100));
       if (progressFilled) progressFilled.style.width = `${pct}%`;
       if (timeLabel) timeLabel.textContent = `${formatTimeSeconds(cur)} / ${formatTimeSeconds(dur)}`;
-
-      // Show/hide floating skip buttons
-      if (cur >= 2 && cur <= 120) {
-        recapFloat?.classList.remove("hidden");
-      } else {
-        recapFloat?.classList.add("hidden");
-      }
-
-      if (epObj.opening && epObj.opening.start != null && epObj.opening.stop != null) {
-        if (cur >= epObj.opening.start && cur <= epObj.opening.stop) {
-          openingFloat?.classList.remove("hidden");
-        } else {
-          openingFloat?.classList.add("hidden");
-        }
-      } else if (cur >= 10 && cur <= 100) {
-        openingFloat?.classList.remove("hidden");
-      } else {
-        openingFloat?.classList.add("hidden");
-      }
 
       // Save watch progress every 2 seconds
       if (cur > 2 && !video.paused) {
@@ -3813,17 +3851,6 @@
       video.currentTime = ratio * dur;
     });
 
-    speedBtn?.addEventListener("click", () => {
-      const rates = [1, 1.25, 1.5, 2];
-      const nextRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length] || 1;
-      video.playbackRate = nextRate;
-      state.currentPlayerState.playbackRate = nextRate;
-      speedBtn.textContent = `${nextRate}x`;
-      showToast(`Скорость воспроизведения: ${nextRate}x`);
-    });
-
-    const prevEpBtn = document.getElementById("lumaPrevEpBtn");
-
     const doPrevEpisode = () => {
       const cur = Number(state.currentPlayerState.episodeOrdinal) || 1;
       if (cur > 1) {
@@ -3850,9 +3877,6 @@
         showToast("Это последняя вышедшая серия");
       }
     };
-
-    prevEpBtn?.addEventListener("click", doPrevEpisode);
-    nextEpBtn?.addEventListener("click", doNextEpisode);
 
     fsBtn?.addEventListener("click", () => {
       if (!document.fullscreenElement) {
