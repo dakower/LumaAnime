@@ -1660,7 +1660,7 @@
 
       const searchResults = await Promise.all(
         queries.map((q) =>
-          fastFetchJson(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`, 2000)
+          fastFetchJson(`https://anilibria.top/api/v1/app/search/releases?query=${encodeURIComponent(q)}`, 3500)
         )
       );
 
@@ -1675,7 +1675,7 @@
       }
 
       if (!match || !match.id) return null;
-      const rel = await fastFetchJson(`https://anilibria.top/api/v1/anime/releases/${match.id}`, 2000);
+      const rel = await fastFetchJson(`https://anilibria.top/api/v1/anime/releases/${match.id}`, 3500);
       if (!rel || !Array.isArray(rel.episodes) || !rel.episodes.length) return null;
 
       const episodes = rel.episodes.map((ep) => ({
